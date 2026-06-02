@@ -193,6 +193,7 @@ async fn run() -> Result<()> {
             base_url: &base_url,
             token: &token,
             assets_abs_dir: &assets_info.assets_abs_dir,
+            dump_state_abs_dir: dump_state_dir.as_deref(),
             markdown_image_prefix: &assets_info.markdown_image_prefix,
             used_names: &mut used_names,
         },

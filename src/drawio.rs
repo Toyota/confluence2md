@@ -34,6 +34,7 @@ pub struct ResolveDrawioOptions<'a> {
     pub base_url: &'a str,
     pub token: &'a str,
     pub assets_abs_dir: &'a Path,
+    pub dump_state_abs_dir: Option<&'a Path>,
     pub markdown_image_prefix: &'a str,
     pub used_names: &'a mut HashSet<String>,
 }
@@ -635,6 +636,7 @@ async fn materialize_drawio_source(
     opts: &mut ResolveDrawioOptions<'_>,
     source: &DrawioAssetSource,
     xml_cache: &mut std::collections::HashMap<String, Option<String>>,
+    dump_used_names: &mut HashSet<String>,
 ) -> Result<String> {
     let png_response = client
         .get(&source.png_url)
@@ -670,13 +672,15 @@ async fn materialize_drawio_source(
                             t.len(),
                             &t.chars().take(80).collect::<String>()
                         );
-                        if let Some(xml_file_name) = &source.xml_file_name {
+                        if let (Some(dump_dir), Some(xml_file_name)) =
+                            (opts.dump_state_abs_dir, &source.xml_file_name)
+                        {
                             let unique =
-                                pick_unique(opts.used_names, sanitize_file_name(xml_file_name));
-                            tokio::fs::write(opts.assets_abs_dir.join(&unique), &t)
+                                pick_unique(dump_used_names, sanitize_file_name(xml_file_name));
+                            tokio::fs::write(dump_dir.join(&unique), &t)
                                 .await
                                 .with_context(|| format!("write {unique}"))?;
-                            debug!("Saved draw.io XML: file: {unique}");
+                            debug!("Saved draw.io XML dump: file: {unique}");
                         }
                         Some(t)
                     }
@@ -755,9 +759,18 @@ pub async fn resolve_drawio_fallbacks(
     let sources = order_drawio_sources(rendered_sources, storage_sources);
     let mut xml_cache = std::collections::HashMap::new();
     let mut local_paths: Vec<String> = Vec::new();
+    let mut dump_used_names: HashSet<String> = HashSet::new();
 
     for source in sources {
-        match materialize_drawio_source(client, &mut opts, &source, &mut xml_cache).await {
+        match materialize_drawio_source(
+            client,
+            &mut opts,
+            &source,
+            &mut xml_cache,
+            &mut dump_used_names,
+        )
+        .await
+        {
             Ok(local_path) => local_paths.push(local_path),
             Err(_) => warn!(
                 "Failed to fetch draw.io preview attachment: {}",
@@ -1016,6 +1029,7 @@ mod tests {
                 base_url: &server.uri(),
                 token: "token",
                 assets_abs_dir: &assets_dir,
+                dump_state_abs_dir: None,
                 markdown_image_prefix: "assets",
                 used_names: &mut used_names,
             },
@@ -1033,14 +1047,93 @@ mod tests {
                 r#"src="assets%2FOwn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.drawio.png""#
             )
         );
-        assert!(assets_dir.join("External.drawio").exists());
         assert!(assets_dir.join("External.drawio.png").exists());
-        assert!(assets_dir.join("Own.drawio").exists());
+        assert!(!assets_dir.join("External.drawio").exists());
+        assert!(!assets_dir.join("Own.drawio").exists());
         assert!(
             assets_dir
                 .join("Own-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.drawio.png")
                 .exists()
         );
+
+        let _ = tokio::fs::remove_dir_all(&temp_root).await;
+    }
+
+    #[tokio::test]
+    async fn resolve_drawio_fallbacks_writes_drawio_xml_only_to_dump_state_dir() {
+        let server = MockServer::start().await;
+        let png = create_minimal_png();
+        let xml = r#"<mxfile><diagram id="dump-test" name="dump-test"><a/></diagram></mxfile>"#;
+
+        Mock::given(method("GET"))
+            .and(path("/download/attachments/current/diagram.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(png))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/download/attachments/current/diagram"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(xml))
+            .mount(&server)
+            .await;
+
+        let storage = r#"<ac:structured-macro ac:name="drawio"><ac:parameter ac:name="diagramName">diagram</ac:parameter></ac:structured-macro>"#;
+        let attachments = HashMap::from([
+            (
+                "diagram.png".to_owned(),
+                Attachment {
+                    id: "1".to_owned(),
+                    title: "diagram.png".to_owned(),
+                    media_type: Some("image/png".to_owned()),
+                    download_path: None,
+                    webui_path: None,
+                },
+            ),
+            (
+                "diagram".to_owned(),
+                Attachment {
+                    id: "2".to_owned(),
+                    title: "diagram".to_owned(),
+                    media_type: None,
+                    download_path: None,
+                    webui_path: None,
+                },
+            ),
+        ]);
+
+        let temp_root = std::env::temp_dir().join(format!(
+            "confluence2md-drawio-dump-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let assets_dir = temp_root.join("assets");
+        let dump_dir = temp_root.join("dump");
+        tokio::fs::create_dir_all(&assets_dir).await.unwrap();
+        tokio::fs::create_dir_all(&dump_dir).await.unwrap();
+        let mut used_names = HashSet::new();
+
+        let _ = resolve_drawio_fallbacks(
+            &Client::new(),
+            ResolveDrawioOptions {
+                page_id: "current",
+                storage_html: Some(storage),
+                export_html: "<p>drawio</p>",
+                attachments_by_title: &attachments,
+                base_url: &server.uri(),
+                token: "token",
+                assets_abs_dir: &assets_dir,
+                dump_state_abs_dir: Some(&dump_dir),
+                markdown_image_prefix: "assets",
+                used_names: &mut used_names,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(assets_dir.join("diagram.drawio.png").exists());
+        assert!(!assets_dir.join("diagram.drawio").exists());
+        assert!(dump_dir.join("diagram.drawio").exists());
 
         let _ = tokio::fs::remove_dir_all(&temp_root).await;
     }

@@ -94,13 +94,13 @@ confluence2md 'https://confluence.example.com/pages/viewpage.action?pageId=39322
 
 ### Options
 
-| Option                      | Description                                              | Default           |
-| --------------------------- | -------------------------------------------------------- | ----------------- |
-| `--output-path <dir>`       | Directory to write the output Markdown file              | Current directory |
-| `--dump-state-path <dir>`   | Directory to write raw API and intermediate HTML dumps   | Not written       |
-| `--log-level <level>`       | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` | `INFO`            |
-| `--table-conversion <mode>` | Table conversion mode: `default` \| `always`             | `default`         |
-| `--version`                 | Print the version and exit                               | —                 |
+| Option                      | Description                                                                      | Default           |
+| --------------------------- | -------------------------------------------------------------------------------- | ----------------- |
+| `--output-path <dir>`       | Directory to write the output Markdown file                                      | Current directory |
+| `--dump-state-path <dir>`   | Directory to write raw API, intermediate HTML dumps, and raw `.drawio` XML files | Not written       |
+| `--log-level <level>`       | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`                         | `INFO`            |
+| `--table-conversion <mode>` | Table conversion mode: `default` \| `always`                                     | `default`         |
+| `--version`                 | Print the version and exit                                                       | —                 |
 
 > 💡 `--output-path` takes precedence over `CONFLUENCE2MD_OUTPUT_PATH`.
 > 💡 `--dump-state-path` takes precedence over `CONFLUENCE2MD_DUMP_STATE_PATH`.
@@ -132,18 +132,18 @@ out/
     ├── image_1.png
     ├── diagram.drawio.png           # 🎨 Editable in draw.io!
     ├── diagram-<aspectHash>.drawio.png  # Per-page image for multi-page diagrams
-    ├── diagram.drawio               # Raw draw.io XML (shared across pages)
     ├── external-diagram.drawio.png  # draw.io rendered from included external-page content
     └── ...
 ```
 
-When `--dump-state-path dumps` is specified, diagnostic state is written separately with non-hidden file names:
+When `--dump-state-path dumps` is specified, diagnostic state and raw `.drawio` XML files are written under the dump directory:
 
 ```text
 dumps/
 ├── content.json
 ├── export.html
 ├── storage.html
+├── *.drawio
 ├── rewrite_drawio.html
 ├── rewrite_image.html
 ├── rewrite_plantuml.html

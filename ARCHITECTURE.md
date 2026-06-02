@@ -72,7 +72,7 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 - **Responsibility:** Parse CLI flags (`clap` derive) and environment variables, set up logging, and orchestrate the conversion pipeline end-to-end.
 - **Key items:** `Cli` struct, `run()` async function (Tokio multi-thread runtime).
 - **Inputs:** `<pageUrl>` arg, `--output-path`, `--log-level`, `--table-conversion`, plus `CONFLUENCE2MD_*` env vars.
-- **Outputs:** `Page_Title.md`, `Page_Title_assets/`. When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the raw page API snapshot (`content.json`) and debug intermediates (`export.html`, `storage.html`, `rewrite_*.html`) are written to that dump directory.
+- **Outputs:** `Page_Title.md`, `Page_Title_assets/`. When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the raw page API snapshot (`content.json`), debug intermediates (`export.html`, `storage.html`, `rewrite_*.html`), and raw draw.io XML files (`*.drawio`) are written to that dump directory.
 
 ### 3.2. `confluence` — REST Client and Image Rewriter
 
@@ -88,10 +88,10 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 
 ### 3.3. `drawio` — draw.io Diagram Resolution
 
-- **Responsibility:** Detect draw.io diagrams from both Confluence storage macros and rendered export-view `<img class="drawio-diagram-image">` tags, download their PNG renders and raw XML, embed the XML into the PNG as a `tEXt` chunk so the file remains editable in the draw.io VS Code extension, and rewrite the HTML to point at the local `.drawio.png` files.
+- **Responsibility:** Detect draw.io diagrams from both Confluence storage macros and rendered export-view `<img class="drawio-diagram-image">` tags, download their PNG renders and raw XML, embed the XML into the PNG as a `tEXt` chunk so the file remains editable in the draw.io VS Code extension, and rewrite the HTML to point at the local `.drawio.png` files. Raw `.drawio` files are retained only when dump-state output is enabled.
 - **Key types:** `DrawioDiagramRef`, `ResolveDrawioOptions`, `FallbackDiagram`, `FallbackResult`.
 - **Key functions:** `extract_drawio_diagrams`, `extract_drawio_diagram_names`, `replace_drawio_script_blocks_with_imgs`, `replace_drawio_img_srcs`, `filter_mxfile_to_aspect_hash`, `embed_drawio_xml_in_png`, `append_fallback_diagrams_section`, `resolve_drawio_fallbacks` (top-level entry).
-- **Notable detail:** multi-page diagrams are disambiguated by an `aspectHash` suffix; the raw `.drawio` XML is parsed with `quick-xml` and filtered down to the matching `<diagram>` via `filter_mxfile_to_aspect_hash`, while the unfiltered XML is saved once and shared across pages. Rendered draw.io images inside included content such as Table Excerpt Include are converted into the same internal asset-source model as native page draw.io macros, so external-page attachments use the same download, XML embedding, save, and rewrite path.
+- **Notable detail:** multi-page diagrams are disambiguated by an `aspectHash` suffix; the raw `.drawio` XML is parsed with `quick-xml` and filtered down to the matching `<diagram>` via `filter_mxfile_to_aspect_hash`, while the unfiltered XML is retained (when dump-state is enabled) once per unique file name. Rendered draw.io images inside included content such as Table Excerpt Include are converted into the same internal asset-source model as native page draw.io macros, so external-page attachments use the same download, XML embedding, save, and rewrite path.
 - **Cross-module note:** `append_fallback_diagrams_section` lives in this module but is also used by `plantuml::resolve_plantuml_fallbacks` to append image-only PlantUML fallbacks at the bottom of the HTML.
 
 ### 3.4. `plantuml` — PlantUML Resolution
@@ -161,7 +161,7 @@ sequenceDiagram
     API-->>Conf: AttachmentMaps
     CLI->>Draw: resolve_drawio_fallbacks
     Draw->>API: GET draw.io PNG/XML attachments
-    Draw->>FS: write assets/*.drawio + *.drawio.png
+    Draw->>FS: write assets/*.drawio.png
     Draw-->>CLI: HTML with *.drawio.png paths
     CLI->>Conf: download_images_and_rewrite_html
     Conf->>API: GET regular <img src> binaries
@@ -209,7 +209,7 @@ flowchart TD
     G --> H[GET PNG bytes]
     H --> I{.drawio XML<br/>available?}
     I -- yes --> J[GET XML once, cache by URL]
-    J --> K[save assets/<name>.drawio]
+    J --> K[save dump/<name>.drawio<br/>only when dump-state enabled]
     K --> L[embed_drawio_xml_in_png<br/>tEXt chunk]
     I -- no --> M[keep raw PNG]
     L --> N[save assets/<name>-<hash>.drawio.png]
@@ -266,11 +266,10 @@ Some included content, for example Table Excerpt Include output, appears only as
 
 confluence2md is **stateless**. The only persistent outputs are local filesystem artifacts:
 
-| Artifact                          | Path (relative to output dir)     | Purpose                           |
-| --------------------------------- | --------------------------------- | --------------------------------- |
-| Converted page                    | `Page_Title.md`                   | Final Markdown                    |
-| Image / draw.io / PlantUML assets | `Page_Title_assets/*`             | Locally referenced binaries       |
-| Raw draw.io XML                   | `Page_Title_assets/<name>.drawio` | Editable source for `.drawio.png` |
+| Artifact                          | Path (relative to output dir) | Purpose                     |
+| --------------------------------- | ----------------------------- | --------------------------- |
+| Converted page                    | `Page_Title.md`               | Final Markdown              |
+| Image / draw.io / PlantUML assets | `Page_Title_assets/*`         | Locally referenced binaries |
 
 When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the following diagnostic files are written relative to the dump directory instead:
 
@@ -278,6 +277,7 @@ When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, 
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | Raw content API response             | `content.json`                                                                                                             | Fixture source for integration tests |
 | Debug intermediates (HTML snapshots) | `export.html`, `storage.html`, `rewrite_drawio.html`, `rewrite_image.html`, `rewrite_plantuml.html`, `rewrite_macros.html` | Inspect each pipeline stage          |
+| Raw draw.io XML                      | `*.drawio`                                                                                                                 | Preserve XML alongside dump state    |
 
 There is no database, cache, or message queue.
 
