@@ -1,6 +1,5 @@
 {
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "vscode.typescript-language-features",
     "cSpell.words": [
         "enduml",
         "IHDR",
