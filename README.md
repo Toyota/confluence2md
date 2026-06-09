@@ -64,6 +64,12 @@ confluence2md fetches a Confluence page via REST API and converts it to GitHub-F
 
 Download the latest release from the [Releases](https://github.com/Toyota/confluence2md/releases) page.
 
+> [!NOTE]
+> Currently, official binary releases are only available for Linux x86_64.
+> If there is demand, we will consider providing binaries for other platforms such as macOS and/or Windows, so please feel free to request them.
+> We have not tested other platforms, but since we do not use any platform-specific features, it should work on other platforms if you build from source code.
+> For build instructions, refer to [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## 🔧 Configuration
 
 Set the following environment variables before running:
