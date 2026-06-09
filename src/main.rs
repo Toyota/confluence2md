@@ -249,7 +249,6 @@ async fn run() -> Result<()> {
     if let Some(webui) = &page.webui {
         markdown.push_str(&format!("- URL: {webui}\n"));
     }
-    markdown.push_str("- HTML source used for conversion: body.export_view\n");
     markdown.push('\n');
     markdown.push_str("---\n");
     markdown.push('\n');
