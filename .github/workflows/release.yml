@@ -43,12 +43,10 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install Rust toolchain
-        env:
-          TARGET: ${{ matrix.target }}
         run: |
           rustup toolchain install 1.95 --no-self-update
           rustup default 1.95
-          rustup target add --toolchain 1.95 "$TARGET"
+          rustup target add --toolchain 1.95 ${{ matrix.target }}
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
