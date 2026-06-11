@@ -38,6 +38,13 @@ use htmd::{
     element_handler::{HandlerResult, Handlers},
     options::{BulletListMarker, Options},
 };
+use lightningcss::{
+    properties::{
+        Property::{self},
+        text::TextDecorationLine,
+    },
+    stylesheet::{ParserOptions, StyleAttribute},
+};
 use markup5ever_rcdom::NodeData;
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -97,7 +104,9 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
         .add_handler(vec!["style", "script"], skip_handler)
         .add_handler(vec!["pre"], pre_handler)
         .add_handler(vec!["details"], details_handler)
-        .add_handler(vec!["summary"], summary_handler);
+        .add_handler(vec!["summary"], summary_handler)
+        .add_handler(vec!["span"], span_handler);
+
     if preserve_merged_tables {
         builder = builder.add_handler(vec!["table"], table_handler_preserve_merged);
     } else {
@@ -107,6 +116,17 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
+
+fn span_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+    let content = handlers.walk_children(element.node).content;
+
+    if span_has_style_text_decoration_line_through(element) {
+        return Some(format!("~~{content}~~").into());
+    }
+
+    // Default for plain <span>: walk children transparently.
+    Some(content.into())
+}
 
 fn div_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let class = class_of(&element);
@@ -248,6 +268,31 @@ fn direct_row_cells(node: &std::rc::Rc<htmd::Node>) -> Vec<std::rc::Rc<htmd::Nod
 
 fn element_name_is(node: &std::rc::Rc<htmd::Node>, expected: &str) -> bool {
     matches!(&node.data, NodeData::Element { name, .. } if &*name.local == expected)
+}
+
+fn span_has_style_text_decoration_line_through(element: Element) -> bool {
+    let attrs = element.attrs.iter();
+
+    for attr in attrs {
+        if attr.name.local.as_ref() == "style" {
+            let style_str = attr.value.as_ref();
+            let style_result = StyleAttribute::parse(style_str, ParserOptions::default());
+
+            if let Ok(style) = style_result {
+                return style.declarations.declarations.iter().any(|decl| {
+                    matches!(
+                        decl,
+                        Property::TextDecoration(text_decoration, _)
+                            if text_decoration
+                                .line
+                                .contains(TextDecorationLine::LineThrough)
+                    )
+                });
+            }
+        }
+    }
+
+    false
 }
 
 /// Check whether a DOM subtree contains any element with colspan or rowspan > 1.
@@ -1290,5 +1335,13 @@ A -> B
             md.contains("| Y |"),
             "Expected second nested markdown table, got:\n{md}"
         );
+    }
+
+    /// [Text effects](https://confluence.atlassian.com/doc/confluence-storage-format-790796544.html#ConfluenceStorageFormat-Texteffects)
+    #[test]
+    fn it_should_render_strikethrough() {
+        let actual = td("<span style=\"text-decoration: line-through;\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
     }
 }
