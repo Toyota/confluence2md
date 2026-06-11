@@ -23,6 +23,8 @@ jobs:
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Run CI checks
+        env:
+          MISE_YES: "1"
         run: |
           mise install
           mise run ci
