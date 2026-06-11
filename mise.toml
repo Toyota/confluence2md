@@ -1,6 +1,6 @@
 [tools]
 "cargo:cargo-machete" = "0.8.0"
-"rust" = { version = "1.95.0", profile = "default" }
+"rust" = { version = "1.95.0", components = ["rustfmt", "clippy"] }
 
 [tasks.ci]
 description = "Run all CI checks: fmt, clippy, build, test, machete"
