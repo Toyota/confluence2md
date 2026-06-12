@@ -73,6 +73,7 @@ Set the following environment variables before running:
 | ------------------------------------- | -------------------------------------------------------------------------- | --------- |
 | `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN` | A Confluence Personal Access Token                                         | `NjQ2...` |
 | `CONFLUENCE2MD_OUTPUT_PATH`           | Directory to write the output Markdown file (default: current directory)   | `out`     |
+| `CONFLUENCE2MD_DUMP_STATE_PATH`       | Directory to write diagnostic state and raw intermediate files             | `dumps`   |
 | `CONFLUENCE2MD_LOG_LEVEL`             | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` (default: `INFO`) | `DEBUG`   |
 | `CONFLUENCE2MD_TABLE_CONVERSION`      | Table conversion mode: `default` \| `always` (default: `default`)          | `always`  |
 
