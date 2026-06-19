@@ -98,7 +98,8 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
         .add_handler(vec!["pre"], pre_tag_handler)
         .add_handler(vec!["details"], details_tag_handler)
         .add_handler(vec!["summary"], summary_tag_handler)
-        .add_handler(vec!["span"], span_tag_handler);
+        .add_handler(vec!["span"], span_tag_handler)
+        .add_handler(vec!["s", "del"], strikethrough_tag_handler);
 
     if preserve_merged_tables {
         builder = builder.add_handler(vec!["table"], table_tag_handler_preserve_merged);
@@ -109,6 +110,11 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
+
+fn strikethrough_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+    let content = handlers.walk_children(element.node).content;
+    Some(format!("~~{content}~~").into())
+}
 
 fn span_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let content = handlers.walk_children(element.node).content;
@@ -1372,5 +1378,17 @@ A -> B
             td("<span style=\"color: red;  TEXT-decoration: line-THROUGH;\">strikethrough</span>");
         let expected = "~~strikethrough~~\n";
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn it_should_render_s_tag_as_strikethrough() {
+        let actual = td("<s>strikethrough</s>");
+        assert_eq!(actual, "~~strikethrough~~\n");
+
+        let actual = td("only <s>this part</s> is struck");
+        assert_eq!(actual, "only ~~this part~~ is struck\n");
+
+        let actual = td("<del>strikethrough</del>");
+        assert_eq!(actual, "~~strikethrough~~\n");
     }
 }
