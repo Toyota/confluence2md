@@ -93,24 +93,24 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
             ul_bullet_spacing: 1,
             ..Options::default()
         })
-        .add_handler(vec!["div"], div_handler)
-        .add_handler(vec!["style", "script"], skip_handler)
-        .add_handler(vec!["pre"], pre_handler)
-        .add_handler(vec!["details"], details_handler)
-        .add_handler(vec!["summary"], summary_handler)
-        .add_handler(vec!["span"], span_handler);
+        .add_handler(vec!["div"], div_tag_handler)
+        .add_handler(vec!["style", "script"], tag_skip_handler)
+        .add_handler(vec!["pre"], pre_tag_handler)
+        .add_handler(vec!["details"], details_tag_handler)
+        .add_handler(vec!["summary"], summary_tag_handler)
+        .add_handler(vec!["span"], span_tag_handler);
 
     if preserve_merged_tables {
-        builder = builder.add_handler(vec!["table"], table_handler_preserve_merged);
+        builder = builder.add_handler(vec!["table"], table_tag_handler_preserve_merged);
     } else {
-        builder = builder.add_handler(vec!["table"], table_handler_unwrap_single_cell);
+        builder = builder.add_handler(vec!["table"], table_tag_handler_unwrap_single_cell);
     }
     builder.build()
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
 
-fn span_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn span_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let content = handlers.walk_children(element.node).content;
 
     if span_has_style_text_decoration_line_through(element) {
@@ -121,7 +121,7 @@ fn span_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResu
     Some(content.into())
 }
 
-fn div_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn div_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let class = class_of(&element);
 
     // Confluence's rendered expand UI: surrounding container becomes
@@ -163,11 +163,11 @@ fn div_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResul
     Some(handlers.walk_children(element.node).content.into())
 }
 
-fn skip_handler(_handlers: &dyn Handlers, _element: Element) -> Option<HandlerResult> {
+fn tag_skip_handler(_handlers: &dyn Handlers, _element: Element) -> Option<HandlerResult> {
     Some(String::new().into())
 }
 
-fn pre_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn pre_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let class = class_of(&element);
     if class.contains("syntaxhighlighter-pre") {
         let params = attr_of(&element, "data-syntaxhighlighter-params").unwrap_or_default();
@@ -179,17 +179,17 @@ fn pre_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResul
     handlers.fallback(element)
 }
 
-fn details_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn details_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let inner = handlers.walk_children(element.node).content;
     Some(format!("\n\n<details>\n{}\n</details>\n\n", inner.trim()).into())
 }
 
-fn summary_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn summary_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let inner = handlers.walk_children(element.node).content;
     Some(format!("<summary>{}</summary>\n\n", inner.trim()).into())
 }
 
-fn table_handler_unwrap_single_cell(
+fn table_tag_handler_unwrap_single_cell(
     handlers: &dyn Handlers,
     element: Element,
 ) -> Option<HandlerResult> {
@@ -202,7 +202,7 @@ fn table_handler_unwrap_single_cell(
 }
 
 /// In `Default` mode, tables with colspan/rowspan are preserved as raw HTML.
-fn table_handler_preserve_merged(
+fn table_tag_handler_preserve_merged(
     handlers: &dyn Handlers,
     element: Element,
 ) -> Option<HandlerResult> {
