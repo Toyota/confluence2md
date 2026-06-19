@@ -132,7 +132,8 @@ cargo clean
 1. Create a branch.
 2. Make edits in the appropriate `src/*.rs` module (and add or update tests).
 3. Run `mise run ci`.
-4. Submit a pull request.
+4. Commit your changes with a [Conventional Commit](https://www.conventionalcommits.org/en/v1.0.0/) message and [sign your commits](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits).
+5. Submit a pull request.
 
 ## Releasing
 
