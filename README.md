@@ -25,6 +25,7 @@ confluence2md fetches a Confluence page via REST API and converts it to GitHub-F
 - 🖼️ **Images** — downloaded and stored locally in an assets directory
 - 📊 **PlantUML** — source code extracted and embedded as `` ```plantuml `` fenced code blocks
 - 🎨 **draw.io** — diagrams saved as `.drawio.png` with embedded XML (editable in the draw.io VS Code extension!). Multi-page diagrams produce one image per referenced page, and draw.io images rendered from included content such as Table Excerpt Include are downloaded from their source attachment page and saved locally the same way.
+- 🅰  **Text effects** — Support for the strikethrough [text effect](https://confluence.atlassian.com/doc/confluence-storage-format-790796544.html#ConfluenceStorageFormat-Texteffects)
 - 📋 **Tables** — preserved as GFM tables
 - 🔗 **Links** — resolved relative to the Confluence base URL
 - 🔗 **Jira links** — Confluence Jira issue macros are converted to simple Markdown links such as `[DEMO-1234](https://jira.example.com/browse/DEMO-1234)` without summary/status placeholder text.

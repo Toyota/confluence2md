@@ -97,7 +97,9 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
         .add_handler(vec!["style", "script"], skip_handler)
         .add_handler(vec!["pre"], pre_handler)
         .add_handler(vec!["details"], details_handler)
-        .add_handler(vec!["summary"], summary_handler);
+        .add_handler(vec!["summary"], summary_handler)
+        .add_handler(vec!["span"], span_handler);
+
     if preserve_merged_tables {
         builder = builder.add_handler(vec!["table"], table_handler_preserve_merged);
     } else {
@@ -107,6 +109,17 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
 }
 
 // ── Handlers ───────────────────────────────────────────────────────
+
+fn span_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+    let content = handlers.walk_children(element.node).content;
+
+    if span_has_style_text_decoration_line_through(element) {
+        return Some(format!("~~{content}~~").into());
+    }
+
+    // Default for plain <span>: walk children transparently.
+    Some(content.into())
+}
 
 fn div_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
     let class = class_of(&element);
@@ -249,6 +262,49 @@ fn direct_row_cells(node: &std::rc::Rc<htmd::Node>) -> Vec<std::rc::Rc<htmd::Nod
 fn element_name_is(node: &std::rc::Rc<htmd::Node>, expected: &str) -> bool {
     matches!(&node.data, NodeData::Element { name, .. } if &*name.local == expected)
 }
+
+static CSS_PROPERTY_TEXT_DECORATION: &str = "text-decoration";
+static CSS_VALUE_LINE_THROUGH: &str = "line-through";
+
+fn span_has_style_text_decoration_line_through(element: Element) -> bool {
+    let Some(style_attr) = element
+        .attrs
+        .iter()
+        .find(|attr| attr.name.local.as_ref() == "style")
+    else {
+        return false;
+    };
+
+    let style_str = style_attr.value.as_ref();
+    let style_result = parse_css_style(style_str);
+    let value = style_result.get(CSS_PROPERTY_TEXT_DECORATION);
+
+    value.map(String::as_str) == Some(CSS_VALUE_LINE_THROUGH)
+}
+
+fn parse_css_style(cssstring: &str) -> CssStyle {
+    let rules = cssstring.split_terminator(";");
+
+    let mut map: CssStyle = HashMap::new();
+
+    for rule in rules {
+        let parsed = parse_css_rule(rule.trim());
+
+        if let Some((k, v)) = parsed {
+            map.insert(k.to_lowercase(), v.to_lowercase());
+        }
+    }
+
+    map
+}
+
+fn parse_css_rule(cssrulestr: &str) -> Option<CssRule<'_>> {
+    let (prop, value) = cssrulestr.split_once(":")?;
+    Some((prop.trim(), value.trim()))
+}
+
+type CssStyle = HashMap<String, String>;
+type CssRule<'a> = (&'a str, &'a str);
 
 /// Check whether a DOM subtree contains any element with colspan or rowspan > 1.
 fn node_has_merged_cells(node: &std::rc::Rc<htmd::Node>) -> bool {
@@ -1290,5 +1346,31 @@ A -> B
             md.contains("| Y |"),
             "Expected second nested markdown table, got:\n{md}"
         );
+    }
+
+    /// [Text effects](https://confluence.atlassian.com/doc/confluence-storage-format-790796544.html#ConfluenceStorageFormat-Texteffects)
+    #[test]
+    fn it_should_render_strikethrough() {
+        let actual = td("<span style=\"text-decoration: line-through;\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
+
+        let actual = td("<span style=\"text-decoration:line-through\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
+
+        let actual = td("<span style=\"text-decoration:\t   line-through\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
+
+        let actual =
+            td("<span style=\"color: red;  text-decoration: line-through;\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
+
+        let actual =
+            td("<span style=\"color: red;  TEXT-decoration: line-THROUGH;\">strikethrough</span>");
+        let expected = "~~strikethrough~~\n";
+        assert_eq!(actual, expected);
     }
 }
