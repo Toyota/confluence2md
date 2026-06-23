@@ -203,7 +203,7 @@ flowchart TD
     A[storage HTML] --> B[extract_drawio_diagrams<br/>diagram name + aspectHash]
     C[export_view HTML] --> D[extract rendered draw.io imgs<br/>including Table Excerpt Include content]
     B --> E[build DrawioAssetSource<br/>from current-page attachments]
-    D --> F[build DrawioAssetSource<br/>from /download/attachments/{pageId}/...]
+    D --> F["build DrawioAssetSource<br/>from /download/attachments/{pageId}/..."]
     E --> G[order_drawio_sources<br/>match rendered imgs to storage sources]
     F --> G
     G --> H[GET PNG bytes]
