@@ -71,25 +71,25 @@ struct Cli {
 }
 
 /// Resolved configuration from CLI arguments and environment variables.
+#[derive(Debug)]
 struct ResolvedConfig {
     page_url: String,
     output_dir: PathBuf,
     dump_state_dir: Option<PathBuf>,
+    log_level: logger::LogLevel,
     table_conversion: TableConversion,
     remove_strikethrough_text: bool,
 }
 
 /// Resolves all configuration from CLI arguments and environment variables.
-/// Also initializes the logger as a side effect.
 fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
-    let level = cli
+    let log_level = cli
         .log_level
         .clone()
         .or_else(|| std::env::var("CONFLUENCE2MD_LOG_LEVEL").ok())
         .map(|s| parse_log_level(&s).context("parsing log level"))
         .transpose()?
         .unwrap_or(logger::LogLevel::Info);
-    logger::init(level);
 
     let table_mode_str = cli
         .table_conversion
@@ -138,6 +138,7 @@ fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
         page_url,
         output_dir: absolutize_path(output_dir)?,
         dump_state_dir,
+        log_level,
         table_conversion,
         remove_strikethrough_text,
     })
@@ -177,6 +178,7 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     let config = resolve_config(&cli)?;
+    logger::init(config.log_level);
 
     let base_url = extract_base_url(&config.page_url)?;
     let token = get_required_env()?.personal_access_token;
@@ -315,4 +317,221 @@ async fn write_dump_state(dir: &Option<PathBuf>, file_name: &str, contents: &str
         tokio::fs::write(dir.join(file_name), contents).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_cli(
+        page_url: Option<&str>,
+        output_path: Option<&str>,
+        dump_state_path: Option<&str>,
+        log_level: Option<&str>,
+        table_conversion: Option<&str>,
+        remove_strikethrough_text: bool,
+    ) -> Cli {
+        Cli {
+            page_url: page_url.map(str::to_owned),
+            output_path: output_path.map(PathBuf::from),
+            dump_state_path: dump_state_path.map(PathBuf::from),
+            log_level: log_level.map(str::to_owned),
+            table_conversion: table_conversion.map(str::to_owned),
+            remove_strikethrough_text,
+        }
+    }
+
+    // ── resolve_config ───────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_config_missing_page_url_returns_error() {
+        let cli = make_cli(None, None, None, None, None, false);
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("Missing required <pageUrl>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_invalid_table_conversion_returns_error() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            Some("invalid"),
+            false,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid --table-conversion"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_defaults_output_dir_to_absolute_path() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(
+            config.output_dir.is_absolute(),
+            "output_dir should be absolute, got: {:?}",
+            config.output_dir
+        );
+    }
+
+    #[test]
+    fn resolve_config_explicit_absolute_output_path() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            Some("/tmp/out"),
+            None,
+            None,
+            None,
+            false,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert_eq!(config.output_dir, PathBuf::from("/tmp/out"));
+    }
+
+    #[test]
+    fn resolve_config_table_conversion_always() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            Some("always"),
+            false,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(matches!(config.table_conversion, TableConversion::Always));
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_flag() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            true,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_invalid_log_level_returns_error() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            Some("TRACE"),
+            None,
+            false,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("parsing log level"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── extract_base_url ─────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_base_url_standard_https() {
+        let url = "https://confluence.example.com/pages/viewpage.action?pageId=1";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://confluence.example.com"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_retains_explicit_port() {
+        let url = "https://confluence.example.com:8443/pages/viewpage.action?pageId=1";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://confluence.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_strips_path_and_query() {
+        let url = "http://confluence.example.com/wiki/spaces/PROJ/pages/123/Title?foo=bar";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "http://confluence.example.com"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_invalid_url_returns_error() {
+        let err = extract_base_url("not-a-url").unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid page URL"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── append_markdown_header ───────────────────────────────────────────────
+
+    #[test]
+    fn append_markdown_header_produces_h1_title() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(md.starts_with("# My Page\n"), "got: {md:?}");
+    }
+
+    #[test]
+    fn append_markdown_header_includes_page_id() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(md.contains("- Confluence Page ID: 12345\n"));
+    }
+
+    #[test]
+    fn append_markdown_header_includes_webui_url_when_present() {
+        let md = append_markdown_header(
+            "My Page",
+            "12345",
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=12345"),
+            "body",
+        );
+        assert!(md.contains(
+            "- URL: https://confluence.example.com/pages/viewpage.action?pageId=12345\n"
+        ));
+    }
+
+    #[test]
+    fn append_markdown_header_omits_url_line_when_webui_is_none() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(!md.contains("- URL:"), "unexpected URL line in: {md:?}");
+    }
+
+    #[test]
+    fn append_markdown_header_contains_body_after_separator() {
+        let md = append_markdown_header("Title", "1", None, "## Section\n\nContent here.");
+        let sep_pos = md.find("---\n").expect("separator not found");
+        let after_sep = &md[sep_pos + 4..];
+        assert!(after_sep.contains("## Section"));
+        assert!(after_sep.contains("Content here."));
+    }
+
+    #[test]
+    fn append_markdown_header_ends_with_newline() {
+        let md = append_markdown_header("Title", "1", None, "body");
+        assert!(md.ends_with('\n'));
+    }
 }
