@@ -12,7 +12,7 @@ use confluence2md::confluence::{
     resolve_page_id_from_url,
 };
 use confluence2md::drawio::{ResolveDrawioOptions, resolve_drawio_diagrams};
-use confluence2md::export_html::{ConvertOptions, TableConversion, convert_to_md};
+use confluence2md::html::{ConvertOptions, TableConversion, convert_to_md};
 use confluence2md::logger::{self, parse_log_level};
 use confluence2md::plantuml::{ResolvePlantUmlOptions, resolve_plantuml_diagrams};
 use confluence2md::utils::{

@@ -17,7 +17,7 @@ confluence2md/
 │   ├── drawio.rs           # draw.io fallback resolution + PNG tEXt embedding
 │   ├── plantuml.rs         # PlantUML source extraction + !include rewriting
 │   ├── jira.rs             # Jira macro/link normalization
-│   ├── export_html.rs      # HTML → Markdown converter (htmd + markup5ever_rcdom)
+│   ├── html.rs             # HTML → Markdown converter (htmd + markup5ever_rcdom)
 │   ├── utils.rs            # String/URL/filename helpers, macro preprocessing dispatcher
 │   └── logger.rs           # Leveled logging built on `tracing`
 ├── tests/                  # Integration tests (`tests/integration.rs`)
@@ -57,7 +57,7 @@ flowchart TD
     E --> F[confluence::download_images_and_rewrite_html<br/>regular img src → local assets]
     F --> G[plantuml::resolve_plantuml_diagrams<br/>imgs → fenced plantuml blocks]
     G --> H[utils::preprocess_confluence_macros<br/>code/expand/jira/lref/alerts]
-    H --> I[export_html::convert_to_md<br/>TOC link rewrite + htmd + custom plugins]
+    H --> I[html::convert_to_md<br/>TOC link rewrite + htmd + custom plugins]
     I --> J[Write Page_Title.md + assets]
 ```
 
@@ -100,7 +100,7 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 - **Key types:** `ResolvePlantUmlOptions`, `DownloadIncludesOptions`.
 - **Key functions:** `extract_plantuml_sources`, `replace_plantuml_imgs_with_code`, `download_plantuml_includes`, `extract_plantuml_export_files` (for the image-only fallback path), `resolve_plantuml_fallbacks` (fallback path only), `resolve_plantuml_diagrams` (top-level entry).
 
-### 3.5. `export_html` — HTML to Markdown Converter
+### 3.5. `html` — HTML to Markdown Converter
 
 - **Responsibility:** Convert the rewritten Confluence HTML into GitHub-Flavored Markdown.
 - **Key types:** `TableConversion` (`Default` | `Always`), `ConvertOptions`.
@@ -144,7 +144,7 @@ sequenceDiagram
     participant Draw as drawio.rs
     participant Plant as plantuml.rs
     participant Utils as utils.rs
-    participant Conv as export_html.rs
+    participant Conv as html.rs
     participant FS as Filesystem
     participant API as Confluence REST API
 
@@ -194,7 +194,7 @@ confluence2md supports a fixed set of Confluence macros. Each is detected and re
 | `note`             | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!WARNING]` alert block                                                                                                                                                                                                                                                                     |
 | `warning`          | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!CAUTION]` alert block                                                                                                                                                                                                                                                                     |
 | (regular `<img>`)  | `confluence::download_images_and_rewrite_html`   | `![alt](assets/<name>.<ext>)`                                                                                                                                                                                                                                                                       |
-| (tables)           | `export_html::convert_to_md` (`TableConversion`) | 1x1 tables are unwrapped to their single cell content. `Default`: Markdown-compatible tables become GFM; merged/nested tables are preserved as pretty-printed HTML. `Always`: merged cells expanded to flat GFM tables; nested tables extracted after the outer table with unique markers (`(*n)`). |
+| (tables)           | `html::convert_to_md` (`TableConversion`) | 1x1 tables are unwrapped to their single cell content. `Default`: Markdown-compatible tables become GFM; merged/nested tables are preserved as pretty-printed HTML. `Always`: merged cells expanded to flat GFM tables; nested tables extracted after the outer table with unique markers (`(*n)`). |
 
 #### 4.2.1. draw.io flow
 
@@ -250,7 +250,7 @@ flowchart LR
     F --> G[HTML out]
 ```
 
-The alert `<div>`s use the same class names the Confluence export view would emit; `export_html::convert_to_md` then maps those classes to GitHub `[!IMPORTANT|NOTE|TIP|WARNING|CAUTION]` blocks during the final Markdown conversion.
+The alert `<div>`s use the same class names the Confluence export view would emit; `html::convert_to_md` then maps those classes to GitHub `[!IMPORTANT|NOTE|TIP|WARNING|CAUTION]` blocks during the final Markdown conversion.
 
 Jira storage macros do not carry a browse URL. `jira::replace_jira_macros` derives the browse base from rendered Jira issue links already present in the REST response, avoiding any hardcoded Jira instance. Rendered issue spans are normalized to only the issue-key link so placeholder summary/status text is not emitted to Markdown.
 

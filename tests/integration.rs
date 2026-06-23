@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use confluence2md::drawio::{extract_drawio_diagram_names, replace_drawio_img_srcs};
-use confluence2md::export_html::{ConvertOptions, TableConversion, convert_to_md};
+use confluence2md::html::{ConvertOptions, TableConversion, convert_to_md};
 use confluence2md::plantuml::{extract_plantuml_sources, replace_plantuml_imgs_with_code};
 use confluence2md::utils::{
     apply_task_list_statuses, preprocess_confluence_macros, sanitize_file_name,

@@ -35,7 +35,7 @@ confluence2md/
 │   ├── confluence.rs              # Confluence REST API client
 │   ├── drawio.rs                  # draw.io fallback handling, PNG tEXt embedding
 │   ├── plantuml.rs                # PlantUML source extraction & rewriting
-│   ├── export_html.rs           # HTML→Markdown converter
+│   ├── html.rs                  # HTML→Markdown converter
 │   └── logger.rs                  # Leveled logging
 ├── tests/
 │   └── integration.rs             # Cross-module integration tests

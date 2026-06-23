@@ -6,7 +6,7 @@
 
 pub mod confluence;
 pub mod drawio;
-pub mod export_html;
+pub mod html;
 pub mod jira;
 pub mod logger;
 pub mod plantuml;

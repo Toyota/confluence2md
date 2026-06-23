@@ -25,7 +25,7 @@ This document defines rules that AI coding agents **must** follow when working o
   - `src/confluence.rs` — Confluence REST API client; page/attachment fetching; regular HTML image rewriting after macro-specific asset handling
   - `src/drawio.rs` — draw.io resolution for storage macros and rendered included-content images; PNG `tEXt` chunk embedding
   - `src/plantuml.rs` — PlantUML source extraction; `!include` rewriting
-  - `src/export_html.rs` — HTML→Markdown converter (built on `htmd` + `markup5ever_rcdom`); rewrites Confluence TOC heading links to Markdown heading anchors
+  - `src/html.rs` — HTML→Markdown converter (built on `htmd` + `markup5ever_rcdom`); rewrites Confluence TOC heading links to Markdown heading anchors
   - `src/logger.rs` — leveled logging
 - **Type co-location:** Types are defined in the module that owns them. Import them directly from the owning module (`use crate::utils::AssetsInfo;`). Do not introduce a shared `types.rs`.
 - **Testing:** All exported functions must have tests. Use Rust's built-in test harness:
