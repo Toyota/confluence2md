@@ -70,7 +70,13 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 ### 3.1. `main.rs` — CLI Entry Point
 
 - **Responsibility:** Parse CLI flags (`clap` derive) and environment variables, set up logging, and orchestrate the conversion pipeline end-to-end.
-- **Key items:** `Cli` struct, `run()` async function (Tokio multi-thread runtime).
+- **Key items:**
+    - `Cli` struct — `clap` derive struct for all flags and positional arguments.
+    - `ResolvedConfig` struct — holds fully resolved configuration after merging CLI args and `CONFLUENCE2MD_*` environment variables.
+    - `resolve_config(cli: &Cli) -> Result<ResolvedConfig>` — resolves all configuration (paths, log level, table conversion mode, strikethrough option) from `Cli` and environment variables; also initializes the logger as a side effect.
+    - `extract_base_url(page_url: &str) -> Result<String>` — parses the page URL and returns the normalized scheme + host + port base URL.
+    - `build_markdown(title, page_id, webui, body) -> String` — assembles the final Markdown document from its components (front-matter header and converted body).
+    - `run()` async function — top-level pipeline orchestrator (Tokio multi-thread runtime).
 - **Inputs:** `<pageUrl>` arg, `--output-path`, `--log-level`, `--table-conversion`, plus `CONFLUENCE2MD_*` env vars.
 - **Outputs:** `Page_Title.md`, `Page_Title_assets/`. When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the raw page API snapshot (`content.json`), debug intermediates (`export.html`, `storage.html`, `rewrite_*.html`), and raw draw.io XML files (`*.drawio`) are written to that dump directory.
 
