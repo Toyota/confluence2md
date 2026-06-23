@@ -66,7 +66,9 @@ struct Cli {
     /// Accepts an optional value (true/false). Omitting the value implies true.
     #[arg(
         long = "remove-strikethrough-text",
+        value_parser = clap::builder::BoolishValueParser::new(),
         num_args = 0..=1,
+        default_missing_value = "true",
         require_equals = true
     )]
     remove_strikethrough_text: Option<bool>,
