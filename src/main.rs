@@ -181,7 +181,7 @@ fn append_markdown_header(title: &str, page_id: &str, webui: Option<&str>, body:
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
-        error!("{err:#}");
+        eprintln!("Error: {err:#}");
         std::process::exit(1);
     }
 }
