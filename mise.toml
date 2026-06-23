@@ -8,6 +8,6 @@ run = [
   "cargo fmt --all -- --check",
   "cargo clippy --all-targets -- -D warnings",
   "cargo build",
-  "cargo test --all-targets",
+  "cargo test --all-targets -- --test-threads=1",
   "cargo machete",
 ]
