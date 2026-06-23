@@ -104,7 +104,7 @@ confluence2md 'https://confluence.example.com/pages/viewpage.action?pageId=39322
 | `--dump-state-path <dir>`       | Directory to write raw API, intermediate HTML dumps, and raw `.drawio` XML files | Not written       |
 | `--log-level <level>`           | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`                         | `INFO`            |
 | `--table-conversion <mode>`     | Table conversion mode: `default` \| `always`                                     | `default`         |
-| `--remove-strikethrough-text`   | Remove strikethrough text entirely instead of converting to `~~text~~`           | Off               |
+| `--remove-strikethrough-text[=true|false]` | Remove strikethrough text entirely instead of converting to `~~text~~`. Omitting the value implies `true`. | Off               |
 | `--version`                     | Print the version and exit                                                       | —                 |
 
 > 💡 `--output-path` takes precedence over `CONFLUENCE2MD_OUTPUT_PATH`.

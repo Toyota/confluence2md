@@ -63,8 +63,13 @@ struct Cli {
     table_conversion: Option<String>,
 
     /// Remove strikethrough text entirely instead of converting to ~~text~~.
-    #[arg(long = "remove-strikethrough-text")]
-    remove_strikethrough_text: bool,
+    /// Accepts an optional value (true/false). Omitting the value implies true.
+    #[arg(
+        long = "remove-strikethrough-text",
+        num_args = 0..=1,
+        require_equals = true
+    )]
+    remove_strikethrough_text: Option<bool>,
 
     /// Confluence page URL.
     page_url: Option<String>,
@@ -129,10 +134,14 @@ fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
         .map(absolutize_path)
         .transpose()?;
 
-    let remove_strikethrough_text = cli.remove_strikethrough_text
-        || std::env::var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT")
-            .map(|v| v == "true")
-            .unwrap_or(false);
+    let remove_strikethrough_text = cli
+        .remove_strikethrough_text
+        .or_else(|| {
+            std::env::var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT")
+                .map(|v| v == "true")
+                .ok()
+        })
+        .unwrap_or(false);
 
     Ok(ResolvedConfig {
         page_url,
@@ -331,7 +340,7 @@ mod tests {
         dump_state_path: Option<&str>,
         log_level: Option<&str>,
         table_conversion: Option<&str>,
-        remove_strikethrough_text: bool,
+        remove_strikethrough_text: Option<bool>,
     ) -> Cli {
         Cli {
             page_url: page_url.map(str::to_owned),
@@ -347,7 +356,7 @@ mod tests {
 
     #[test]
     fn resolve_config_missing_page_url_returns_error() {
-        let cli = make_cli(None, None, None, None, None, false);
+        let cli = make_cli(None, None, None, None, None, None);
         let err = resolve_config(&cli).unwrap_err();
         assert!(
             err.to_string().contains("Missing required <pageUrl>"),
@@ -363,7 +372,7 @@ mod tests {
             None,
             None,
             Some("invalid"),
-            false,
+            None,
         );
         let err = resolve_config(&cli).unwrap_err();
         assert!(
@@ -380,7 +389,7 @@ mod tests {
             None,
             None,
             None,
-            false,
+            None,
         );
         let config = resolve_config(&cli).unwrap();
         assert!(
@@ -398,7 +407,7 @@ mod tests {
             None,
             None,
             None,
-            false,
+            None,
         );
         let config = resolve_config(&cli).unwrap();
         assert_eq!(config.output_dir, PathBuf::from("/tmp/out"));
@@ -412,7 +421,7 @@ mod tests {
             None,
             None,
             Some("always"),
-            false,
+            None,
         );
         let config = resolve_config(&cli).unwrap();
         assert!(matches!(config.table_conversion, TableConversion::Always));
@@ -426,10 +435,46 @@ mod tests {
             None,
             None,
             None,
-            true,
+            Some(true),
         );
         let config = resolve_config(&cli).unwrap();
         assert!(config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "true") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let config = resolve_config(&cli).unwrap();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_cli_false_overrides_env_var() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "true") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        );
+        let config = resolve_config(&cli).unwrap();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(!config.remove_strikethrough_text);
     }
 
     #[test]
@@ -440,7 +485,7 @@ mod tests {
             None,
             Some("TRACE"),
             None,
-            false,
+            None,
         );
         let err = resolve_config(&cli).unwrap_err();
         assert!(
