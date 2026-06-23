@@ -64,7 +64,7 @@ pub struct ConvertOptions {
 
 /// Convert `html` to GitHub-flavoured Markdown with Confluence-specific
 /// extensions.
-pub fn convert_to_md(html: &str, options: ConvertOptions) -> String {
+pub fn convert_html_to_markdown(html: &str, options: ConvertOptions) -> String {
     let heading_links_rewritten = rewrite_internal_heading_links(html);
     match options.table_conversion {
         TableConversion::Default => {
@@ -1097,11 +1097,11 @@ mod tests {
     use super::*;
 
     fn td(html: &str) -> String {
-        convert_to_md(html, ConvertOptions::default())
+        convert_html_to_markdown(html, ConvertOptions::default())
     }
 
     fn td_always(html: &str) -> String {
-        convert_to_md(
+        convert_html_to_markdown(
             html,
             ConvertOptions {
                 table_conversion: TableConversion::Always,
@@ -1429,7 +1429,7 @@ A -> B
     }
 
     fn td_remove_st(html: &str) -> String {
-        convert_to_md(
+        convert_html_to_markdown(
             html,
             ConvertOptions {
                 remove_strikethrough_text: true,
