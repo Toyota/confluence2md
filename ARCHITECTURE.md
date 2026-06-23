@@ -53,9 +53,9 @@ flowchart TD
     A[main.rs<br/>parse CLI / env] --> B[confluence::resolve_page_id_from_url]
     B --> C[confluence::fetch_confluence_page<br/>export_view / storage HTML]
     C --> D[confluence::list_attachments<br/>+ build_attachment_maps]
-    D --> E[drawio::resolve_drawio_fallbacks<br/>draw.io macros / rendered imgs → .drawio.png]
+    D --> E[drawio::resolve_drawio_diagrams<br/>draw.io macros / rendered imgs → .drawio.png]
     E --> F[confluence::download_images_and_rewrite_html<br/>regular img src → local assets]
-    F --> G[plantuml::resolve_plantuml_fallbacks<br/>imgs → fenced plantuml blocks]
+    F --> G[plantuml::resolve_plantuml_diagrams<br/>imgs → fenced plantuml blocks]
     G --> H[utils::preprocess_confluence_macros<br/>code/expand/jira/lref/alerts]
     H --> I[export_html::convert_to_md<br/>TOC link rewrite + htmd + custom plugins]
     I --> J[Write Page_Title.md + assets]
@@ -89,16 +89,16 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 ### 3.3. `drawio` — draw.io Diagram Resolution
 
 - **Responsibility:** Detect draw.io diagrams from both Confluence storage macros and rendered export-view `<img class="drawio-diagram-image">` tags, download their PNG renders and raw XML, embed the XML into the PNG as a `tEXt` chunk so the file remains editable in the draw.io VS Code extension, and rewrite the HTML to point at the local `.drawio.png` files. Raw `.drawio` files are retained only when dump-state output is enabled.
-- **Key types:** `DrawioDiagramRef`, `ResolveDrawioOptions`, `FallbackDiagram`, `FallbackResult`.
-- **Key functions:** `extract_drawio_diagrams`, `extract_drawio_diagram_names`, `replace_drawio_script_blocks_with_imgs`, `replace_drawio_img_srcs`, `filter_mxfile_to_aspect_hash`, `embed_drawio_xml_in_png`, `append_fallback_diagrams_section`, `resolve_drawio_fallbacks` (top-level entry).
+- **Key types:** `DrawioDiagramRef`, `ResolveDrawioOptions`, `FallbackDiagram`, `RewrittenHtml`.
+- **Key functions:** `extract_drawio_diagrams`, `extract_drawio_diagram_names`, `replace_drawio_script_blocks_with_imgs`, `replace_drawio_img_srcs`, `filter_mxfile_to_aspect_hash`, `embed_drawio_xml_in_png`, `append_fallback_diagrams_section`, `resolve_drawio_diagrams` (top-level entry).
 - **Notable detail:** multi-page diagrams are disambiguated by an `aspectHash` suffix; the raw `.drawio` XML is parsed with `quick-xml` and filtered down to the matching `<diagram>` via `filter_mxfile_to_aspect_hash`, while the unfiltered XML is retained (when dump-state is enabled) once per unique file name. Rendered draw.io images inside included content such as Table Excerpt Include are converted into the same internal asset-source model as native page draw.io macros, so external-page attachments use the same download, XML embedding, save, and rewrite path.
-- **Cross-module note:** `append_fallback_diagrams_section` lives in this module but is also used by `plantuml::resolve_plantuml_fallbacks` to append image-only PlantUML fallbacks at the bottom of the HTML.
+- **Cross-module note:** `append_fallback_diagrams_section` lives in this module but is also used by `plantuml::resolve_plantuml_fallbacks` (fallback path only) to append image-only PlantUML fallbacks at the bottom of the HTML.
 
 ### 3.4. `plantuml` — PlantUML Resolution
 
 - **Responsibility:** Replace Confluence's server-rendered PlantUML `<img>` tags with fenced `plantuml` code blocks containing the original source, downloading any `!include`d attachments alongside.
 - **Key types:** `ResolvePlantUmlOptions`, `DownloadIncludesOptions`.
-- **Key functions:** `extract_plantuml_sources`, `replace_plantuml_imgs_with_code`, `download_plantuml_includes`, `extract_plantuml_export_files` (for the image-only fallback path), `resolve_plantuml_fallbacks` (top-level entry).
+- **Key functions:** `extract_plantuml_sources`, `replace_plantuml_imgs_with_code`, `download_plantuml_includes`, `extract_plantuml_export_files` (for the image-only fallback path), `resolve_plantuml_fallbacks` (fallback path only), `resolve_plantuml_diagrams` (top-level entry).
 
 ### 3.5. `export_html` — HTML to Markdown Converter
 
@@ -159,7 +159,7 @@ sequenceDiagram
     CLI->>Conf: list_attachments(id) + build_attachment_maps
     Conf->>API: GET /content/{id}/child/attachment (paginated)
     API-->>Conf: AttachmentMaps
-    CLI->>Draw: resolve_drawio_fallbacks
+    CLI->>Draw: resolve_drawio_diagrams
     Draw->>API: GET draw.io PNG/XML attachments
     Draw->>FS: write assets/*.drawio.png
     Draw-->>CLI: HTML with *.drawio.png paths
@@ -167,7 +167,7 @@ sequenceDiagram
     Conf->>API: GET regular <img src> binaries
     Conf->>FS: write assets/*.png|jpg|...
     Conf-->>CLI: HTML with local img paths
-    CLI->>Plant: resolve_plantuml_fallbacks
+    CLI->>Plant: resolve_plantuml_diagrams
     Plant-->>CLI: HTML with fenced plantuml blocks
     CLI->>Utils: preprocess_confluence_macros
     Utils-->>CLI: HTML with code/expand/alert/lref rewritten
@@ -182,8 +182,8 @@ confluence2md supports a fixed set of Confluence macros. Each is detected and re
 
 | Macro              | Stage (module::function)                         | Resulting Markdown / HTML                                                                                                                                                                                                                                                                           |
 | ------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `drawio`           | `drawio::resolve_drawio_fallbacks`               | `![alt](assets/<name>.drawio.png)` — PNG with `.drawio` XML in `tEXt`. Native page draw.io macros and rendered draw.io images inside included content are resolved through the same asset pipeline.                                                                                                 |
-| `plantuml`         | `plantuml::resolve_plantuml_fallbacks`           | Fenced code block: ` ```plantuml ... ``` `                                                                                                                                                                                                                                                          |
+| `drawio`           | `drawio::resolve_drawio_diagrams`                | `![alt](assets/<name>.drawio.png)` — PNG with `.drawio` XML in `tEXt`. Native page draw.io macros and rendered draw.io images inside included content are resolved through the same asset pipeline.                                                                                                 |
+| `plantuml`         | `plantuml::resolve_plantuml_diagrams`            | Fenced code block: ` ```plantuml ... ``` `                                                                                                                                                                                                                                                          |
 | `code`             | `utils::preprocess_confluence_macros` (`code`)   | Fenced code block with optional language: ` ```c++ ... ``` `                                                                                                                                                                                                                                        |
 | `expand`           | `utils::preprocess_confluence_macros` (expand)   | `<details><summary>Title</summary> ... </details>`                                                                                                                                                                                                                                                  |
 | `jira`             | `jira::replace_jira_macros`                      | Simple issue link: `[DEMO-1234](https://jira.example.com/browse/DEMO-1234)`. Storage macros derive the browse URL from rendered Jira links when available; otherwise they emit plain key text.                                                                                                      |

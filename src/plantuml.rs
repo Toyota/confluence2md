@@ -13,7 +13,7 @@ use tracing::{debug, warn};
 use crate::confluence::{
     Attachment, DownloadAttachmentOptions, attachment_download_url, download_attachment_to_asset,
 };
-use crate::drawio::{FallbackDiagram, FallbackResult, append_fallback_diagrams_section};
+use crate::drawio::{FallbackDiagram, RewrittenHtml, append_fallback_diagrams_section};
 use crate::utils::{escape_html, extract_macro_blocks, extract_macro_param};
 
 pub struct ResolvePlantUmlOptions<'a> {
@@ -172,10 +172,12 @@ pub async fn download_plantuml_includes(
 
 // ── High-level resolution ──────────────────────────────────────────
 
-pub async fn resolve_plantuml_fallbacks(
+/// Resolves PlantUML by the primary path (fenced code blocks) when source is
+/// available, otherwise delegates to the fallback path (exported image files).
+pub async fn resolve_plantuml_diagrams(
     client: &Client,
     opts: ResolvePlantUmlOptions<'_>,
-) -> Result<FallbackResult> {
+) -> Result<RewrittenHtml> {
     let sources = extract_plantuml_sources(opts.storage_html);
 
     if !sources.is_empty() {
@@ -189,18 +191,21 @@ pub async fn resolve_plantuml_fallbacks(
         };
         let rewritten_sources = download_plantuml_includes(client, &sources, &include_opts).await?;
         let rewritten_html = replace_plantuml_imgs_with_code(opts.html, &rewritten_sources);
-        return Ok(FallbackResult {
-            html: rewritten_html,
-            fallback_paths: Vec::new(),
-        });
+        return Ok(RewrittenHtml(rewritten_html));
     }
 
+    resolve_plantuml_fallbacks(client, opts).await
+}
+
+/// Fallback path only: PlantUML source is unavailable; downloads exported image attachments and
+/// appends them as an image section at the bottom of the HTML.
+async fn resolve_plantuml_fallbacks(
+    client: &Client,
+    opts: ResolvePlantUmlOptions<'_>,
+) -> Result<RewrittenHtml> {
     let export_files = extract_plantuml_export_files(opts.storage_html);
     if export_files.is_empty() {
-        return Ok(FallbackResult {
-            html: opts.html.to_owned(),
-            fallback_paths: Vec::new(),
-        });
+        return Ok(RewrittenHtml(opts.html.to_owned()));
     }
 
     let mut fallback_diagrams: Vec<FallbackDiagram> = Vec::new();
@@ -236,14 +241,7 @@ pub async fn resolve_plantuml_fallbacks(
     }
 
     let rewritten_html = append_fallback_diagrams_section(opts.html, &fallback_diagrams);
-    let fallback_paths = fallback_diagrams
-        .into_iter()
-        .map(|d| d.local_path)
-        .collect();
-    Ok(FallbackResult {
-        html: rewritten_html,
-        fallback_paths,
-    })
+    Ok(RewrittenHtml(rewritten_html))
 }
 
 #[cfg(test)]

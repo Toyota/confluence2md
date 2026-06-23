@@ -40,10 +40,7 @@ pub struct ResolveDrawioOptions<'a> {
 }
 
 #[derive(Debug, Default)]
-pub struct FallbackResult {
-    pub html: String,
-    pub fallback_paths: Vec<String>,
-}
+pub struct RewrittenHtml(pub String);
 
 // ── Extraction ─────────────────────────────────────────────────────
 
@@ -740,20 +737,17 @@ async fn materialize_drawio_source(
     Ok(to_markdown_asset_path(opts.markdown_image_prefix, &unique))
 }
 
-pub async fn resolve_drawio_fallbacks(
+pub async fn resolve_drawio_diagrams(
     client: &Client,
     mut opts: ResolveDrawioOptions<'_>,
-) -> Result<FallbackResult> {
+) -> Result<RewrittenHtml> {
     let rendered_sources = extract_rendered_drawio_sources(opts.export_html, opts.base_url);
     let storage_sources: Vec<DrawioAssetSource> = extract_drawio_diagrams(opts.storage_html)
         .iter()
         .filter_map(|dref| storage_drawio_source(dref, &opts))
         .collect();
     if rendered_sources.is_empty() && storage_sources.is_empty() {
-        return Ok(FallbackResult {
-            html: opts.export_html.to_owned(),
-            fallback_paths: Vec::new(),
-        });
+        return Ok(RewrittenHtml(opts.export_html.to_owned()));
     }
 
     let sources = order_drawio_sources(rendered_sources, storage_sources);
@@ -782,10 +776,7 @@ pub async fn resolve_drawio_fallbacks(
     let mut rewritten =
         replace_drawio_script_blocks_with_imgs(Some(opts.export_html), &local_paths);
     rewritten = replace_drawio_img_srcs(&rewritten, &local_paths);
-    Ok(FallbackResult {
-        html: rewritten,
-        fallback_paths: local_paths,
-    })
+    Ok(RewrittenHtml(rewritten))
 }
 
 // Suppress unused-warning on imports we keep for the public API surface.
@@ -1019,7 +1010,7 @@ mod tests {
         tokio::fs::create_dir_all(&assets_dir).await.unwrap();
         let mut used_names = HashSet::new();
 
-        let result = resolve_drawio_fallbacks(
+        let result = resolve_drawio_diagrams(
             &Client::new(),
             ResolveDrawioOptions {
                 page_id: "current",
@@ -1037,13 +1028,9 @@ mod tests {
         .await
         .unwrap();
 
+        assert!(result.0.contains(r#"src="assets%2FExternal.drawio.png""#));
         assert!(
-            result
-                .html
-                .contains(r#"src="assets%2FExternal.drawio.png""#)
-        );
-        assert!(
-            result.html.contains(
+            result.0.contains(
                 r#"src="assets%2FOwn-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.drawio.png""#
             )
         );
@@ -1113,7 +1100,7 @@ mod tests {
         tokio::fs::create_dir_all(&dump_dir).await.unwrap();
         let mut used_names = HashSet::new();
 
-        let _ = resolve_drawio_fallbacks(
+        let _ = resolve_drawio_diagrams(
             &Client::new(),
             ResolveDrawioOptions {
                 page_id: "current",

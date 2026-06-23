@@ -11,10 +11,10 @@ use confluence2md::confluence::{
     download_images_and_rewrite_html, fetch_confluence_page, get_required_env, list_attachments,
     resolve_page_id_from_url,
 };
-use confluence2md::drawio::{ResolveDrawioOptions, resolve_drawio_fallbacks};
+use confluence2md::drawio::{ResolveDrawioOptions, resolve_drawio_diagrams};
 use confluence2md::export_html::{ConvertOptions, TableConversion, convert_to_md};
 use confluence2md::logger::{self, parse_log_level};
-use confluence2md::plantuml::{ResolvePlantUmlOptions, resolve_plantuml_fallbacks};
+use confluence2md::plantuml::{ResolvePlantUmlOptions, resolve_plantuml_diagrams};
 use confluence2md::utils::{
     apply_task_list_statuses, ensure_dir, make_assets_info, normalize_base_url,
     preprocess_confluence_macros, sanitize_file_name,
@@ -183,7 +183,7 @@ async fn run() -> Result<()> {
 
     let mut used_names: HashSet<String> = HashSet::new();
 
-    let drawio_result = resolve_drawio_fallbacks(
+    let drawio_result = resolve_drawio_diagrams(
         &client,
         ResolveDrawioOptions {
             page_id: &page_id,
@@ -199,7 +199,7 @@ async fn run() -> Result<()> {
         },
     )
     .await?;
-    html_for_markdown = drawio_result.html;
+    html_for_markdown = drawio_result.0;
     write_dump_state(&dump_state_dir, "rewrite_drawio.html", &html_for_markdown).await?;
 
     html_for_markdown = download_images_and_rewrite_html(
@@ -216,7 +216,7 @@ async fn run() -> Result<()> {
     .await?;
     write_dump_state(&dump_state_dir, "rewrite_image.html", &html_for_markdown).await?;
 
-    let plantuml_result = resolve_plantuml_fallbacks(
+    let plantuml_result = resolve_plantuml_diagrams(
         &client,
         ResolvePlantUmlOptions {
             page_id: &page_id,
@@ -231,7 +231,7 @@ async fn run() -> Result<()> {
         },
     )
     .await?;
-    html_for_markdown = plantuml_result.html;
+    html_for_markdown = plantuml_result.0;
     write_dump_state(&dump_state_dir, "rewrite_plantuml.html", &html_for_markdown).await?;
 
     if let Some(storage_html) = page.storage_html.as_deref() {
