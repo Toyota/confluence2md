@@ -212,6 +212,7 @@ fn always_table_mode_unwraps_single_cell_table() {
         html,
         ConvertOptions {
             table_conversion: TableConversion::Always,
+            ..ConvertOptions::default()
         },
     );
     assert_eq!(md, "Only cell\n");

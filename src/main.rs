@@ -36,6 +36,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
         "  CONFLUENCE2MD_DUMP_STATE_PATH        dump-state directory (overridden by --dump-state-path)\n",
         "  CONFLUENCE2MD_LOG_LEVEL              log level (overridden by --log-level)\n",
         "  CONFLUENCE2MD_TABLE_CONVERSION       table conversion mode (overridden by --table-conversion)\n",
+        "  CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT  set to \"true\" to remove strikethrough text\n",
+        "                                           (overridden by --remove-strikethrough-text)\n",
         "\n",
         "Example:\n",
         "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN=\"xxx\" \\\n",
@@ -59,6 +61,10 @@ struct Cli {
     /// Table conversion mode: default | always (default: default).
     #[arg(long = "table-conversion", value_name = "MODE")]
     table_conversion: Option<String>,
+
+    /// Remove strikethrough text entirely instead of converting to ~~text~~.
+    #[arg(long = "remove-strikethrough-text")]
+    remove_strikethrough_text: bool,
 
     /// Confluence page URL.
     page_url: Option<String>,
@@ -240,7 +246,18 @@ async fn run() -> Result<()> {
     html_for_markdown = preprocess_confluence_macros(&html_for_markdown);
     write_dump_state(&dump_state_dir, "rewrite_macros.html", &html_for_markdown).await?;
 
-    let markdown_body = convert_to_md(&html_for_markdown, ConvertOptions { table_conversion });
+    let remove_strikethrough_text = cli.remove_strikethrough_text
+        || std::env::var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
+    let markdown_body = convert_to_md(
+        &html_for_markdown,
+        ConvertOptions {
+            table_conversion,
+            remove_strikethrough_text,
+        },
+    );
 
     let mut markdown = String::new();
     markdown.push_str(&format!("# {title}\n"));

@@ -56,6 +56,10 @@ pub enum TableConversion {
 #[derive(Debug, Clone, Default)]
 pub struct ConvertOptions {
     pub table_conversion: TableConversion,
+    /// When `true`, strikethrough text (`<s>`, `<del>`, and
+    /// `<span style="text-decoration: line-through">`) is removed entirely
+    /// instead of being converted to `~~text~~`.
+    pub remove_strikethrough_text: bool,
 }
 
 /// Convert `html` to GitHub-flavoured Markdown with Confluence-specific
@@ -65,16 +69,16 @@ pub fn convert_to_md(html: &str, options: ConvertOptions) -> String {
     match options.table_conversion {
         TableConversion::Default => {
             let promoted = promote_markdown_compatible_tables_to_thead(&heading_links_rewritten);
-            let converter = build_converter(true);
+            let converter = build_converter(&options);
             let md = converter.convert(&promoted).unwrap_or_default();
             post_process(&md)
         }
         TableConversion::Always => {
             let (nested_processed, nested_replacements) =
-                preprocess_nested_tables_always(&heading_links_rewritten);
+                preprocess_nested_tables_always(&heading_links_rewritten, &options);
             let expanded = expand_merged_cells(&nested_processed);
             let promoted = promote_first_row_to_thead(&expanded);
-            let converter = build_converter(false);
+            let converter = build_converter(&options);
             let mut md = post_process(&converter.convert(&promoted).unwrap_or_default());
             for (token, replacement) in nested_replacements {
                 md = md.replace(&token, &replacement);
@@ -86,7 +90,8 @@ pub fn convert_to_md(html: &str, options: ConvertOptions) -> String {
 
 // ── Converter setup ────────────────────────────────────────────────
 
-fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
+fn build_converter(options: &ConvertOptions) -> HtmlToMarkdown {
+    let remove_strikethrough_text = options.remove_strikethrough_text;
     let mut builder = HtmlToMarkdown::builder()
         .options(Options {
             bullet_list_marker: BulletListMarker::Dash,
@@ -98,9 +103,20 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
         .add_handler(vec!["pre"], pre_tag_handler)
         .add_handler(vec!["details"], details_tag_handler)
         .add_handler(vec!["summary"], summary_tag_handler)
-        .add_handler(vec!["span"], span_tag_handler)
-        .add_handler(vec!["s", "del"], strikethrough_tag_handler);
+        .add_handler(
+            vec!["span"],
+            move |handlers: &dyn Handlers, element: Element| -> Option<HandlerResult> {
+                span_tag_handler(handlers, element, remove_strikethrough_text)
+            },
+        )
+        .add_handler(
+            vec!["s", "del"],
+            move |handlers: &dyn Handlers, element: Element| -> Option<HandlerResult> {
+                strikethrough_tag_handler(handlers, element, remove_strikethrough_text)
+            },
+        );
 
+    let preserve_merged_tables = options.table_conversion == TableConversion::Default;
     if preserve_merged_tables {
         builder = builder.add_handler(vec!["table"], table_tag_handler_preserve_merged);
     } else {
@@ -111,16 +127,32 @@ fn build_converter(preserve_merged_tables: bool) -> HtmlToMarkdown {
 
 // ── Handlers ───────────────────────────────────────────────────────
 
-fn strikethrough_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn strikethrough_tag_handler(
+    handlers: &dyn Handlers,
+    element: Element,
+    remove_strikethrough_text: bool,
+) -> Option<HandlerResult> {
+    if remove_strikethrough_text {
+        return Some(String::new().into());
+    }
+
     let content = handlers.walk_children(element.node).content;
     Some(format!("~~{content}~~").into())
 }
 
-fn span_tag_handler(handlers: &dyn Handlers, element: Element) -> Option<HandlerResult> {
+fn span_tag_handler(
+    handlers: &dyn Handlers,
+    element: Element,
+    remove_strikethrough_text: bool,
+) -> Option<HandlerResult> {
     let content = handlers.walk_children(element.node).content;
 
     if span_has_style_text_decoration_line_through(element) {
-        return Some(format!("~~{content}~~").into());
+        return if remove_strikethrough_text {
+            Some(String::new().into())
+        } else {
+            Some(format!("~~{content}~~").into())
+        };
     }
 
     // Default for plain <span>: walk children transparently.
@@ -743,10 +775,10 @@ fn extract_nested_tables_from_table(
     (outer, extracted)
 }
 
-fn convert_table_fragment_always(table_html: &str) -> String {
+fn convert_table_fragment_always(table_html: &str, options: &ConvertOptions) -> String {
     let expanded = expand_merged_cells(table_html);
     let promoted = promote_first_row_to_thead(&expanded);
-    let converter = build_converter(false);
+    let converter = build_converter(options);
     post_process(&converter.convert(&promoted).unwrap_or_default())
         .trim()
         .to_string()
@@ -757,7 +789,10 @@ fn convert_table_fragment_always(table_html: &str) -> String {
 ///
 /// 1. Outer table markdown (nested cells replaced by markers)
 /// 2. Extracted nested table markdowns appended after the outer table
-fn preprocess_nested_tables_always(html: &str) -> (String, Vec<(String, String)>) {
+fn preprocess_nested_tables_always(
+    html: &str,
+    options: &ConvertOptions,
+) -> (String, Vec<(String, String)>) {
     let ranges = find_top_level_table_ranges(html);
     if ranges.is_empty() {
         return (html.to_string(), Vec::new());
@@ -779,9 +814,9 @@ fn preprocess_nested_tables_always(html: &str) -> (String, Vec<(String, String)>
             let (outer, extracted) =
                 extract_nested_tables_from_table(table_html, &mut marker_counter);
 
-            let mut snippet = convert_table_fragment_always(&outer);
+            let mut snippet = convert_table_fragment_always(&outer, options);
             for (marker, nested_table_html) in extracted {
-                let nested_md = convert_table_fragment_always(&nested_table_html);
+                let nested_md = convert_table_fragment_always(&nested_table_html, options);
                 snippet.push_str("\n\n");
                 snippet.push_str(&marker);
                 snippet.push_str("\n\n");
@@ -1070,6 +1105,7 @@ mod tests {
             html,
             ConvertOptions {
                 table_conversion: TableConversion::Always,
+                ..ConvertOptions::default()
             },
         )
     }
@@ -1390,5 +1426,41 @@ A -> B
 
         let actual = td("<del>strikethrough</del>");
         assert_eq!(actual, "~~strikethrough~~\n");
+    }
+
+    fn td_remove_st(html: &str) -> String {
+        convert_to_md(
+            html,
+            ConvertOptions {
+                remove_strikethrough_text: true,
+                ..ConvertOptions::default()
+            },
+        )
+    }
+
+    #[test]
+    fn it_should_remove_strikethrough_when_option_enabled() {
+        // <s> tag
+        assert_eq!(td_remove_st("<s>gone</s>"), "\n");
+        assert_eq!(td_remove_st("keep <s>gone</s> keep"), "keep keep\n");
+
+        // <del> tag
+        assert_eq!(td_remove_st("<del>gone</del>"), "\n");
+
+        // <span style="text-decoration: line-through">
+        assert_eq!(
+            td_remove_st("<span style=\"text-decoration: line-through;\">gone</span>"),
+            "\n"
+        );
+        assert_eq!(
+            td_remove_st("keep <span style=\"text-decoration: line-through;\">gone</span> keep"),
+            "keep keep\n"
+        );
+
+        // Non-strikethrough span is unaffected
+        assert_eq!(
+            td_remove_st("<span style=\"color: red;\">visible</span>"),
+            "visible\n"
+        );
     }
 }
