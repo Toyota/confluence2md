@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser, builder::TypedValueParser};
 
 use confluence2md::confluence::{
     DownloadImagesOptions, build_attachment_maps, build_http_client,
@@ -138,11 +138,22 @@ fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
 
     let remove_strikethrough_text = cli
         .remove_strikethrough_text
+        .map(Ok)
         .or_else(|| {
             std::env::var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT")
-                .map(|v| v == "true")
                 .ok()
+                .map(|value| {
+                    clap::builder::BoolishValueParser::new()
+                        .parse_ref(&Cli::command(), None, std::ffi::OsStr::new(&value))
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "Invalid CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT value: \"{value}\". \
+                                 Must be \"true\", \"false\", \"1\", \"0\", \"yes\", \"no\", \"on\", or \"off\"."
+                            )
+                        })
+                })
         })
+        .transpose()?
         .unwrap_or(false);
 
     Ok(ResolvedConfig {
@@ -477,6 +488,74 @@ mod tests {
         // SAFETY: test-only; single-threaded test environment
         unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
         assert!(!config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_truthy_values() {
+        for value in &["1", "yes", "on", "TRUE"] {
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", value) };
+            let cli = make_cli(
+                Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let config = resolve_config(&cli).unwrap();
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+            assert!(
+                config.remove_strikethrough_text,
+                "expected true for env var value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_falsy_values() {
+        for value in &["0", "no", "off", "FALSE"] {
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", value) };
+            let cli = make_cli(
+                Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let config = resolve_config(&cli).unwrap();
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+            assert!(
+                !config.remove_strikethrough_text,
+                "expected false for env var value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_invalid_value_returns_error() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "invalid") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(
+            err.to_string()
+                .contains("Invalid CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
