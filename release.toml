@@ -1,0 +1,7 @@
+sign-tag = true
+pre-release-commit-message = "version: {{version}}"
+tag-name = "v{{version}}"
+tag-message = "Release version {{version}}"
+push-remote = "origin"
+publish = false
+pre-release-hook = ["mise", "run", "ci"]

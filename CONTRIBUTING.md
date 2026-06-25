@@ -137,18 +137,25 @@ cargo clean
 
 ## Releasing
 
-1. Update the version in `Cargo.toml` following [Semantic Versioning](https://semver.org/).
-2. Commit the change:
+Releases are automated with [`cargo-release`](https://github.com/crate-ci/cargo-release).
+The configuration lives in [`release.toml`](release.toml) and runs `mise run ci`
+as a pre-release hook.
+
+1. Install `cargo-release` (one-time setup):
    ```bash
-   git add Cargo.toml Cargo.lock
-   git commit -m "version: x.y.z"
+   cargo install cargo-release
    ```
-3. Create a git tag:
+2. Dry-run to verify the planned steps (cargo-release defaults to dry-run):
    ```bash
-   git tag vx.y.z -m "Release version x.y.z"
+   cargo release x.y.z
    ```
-4. Push the tag to GitHub:
+3. Execute the release:
    ```bash
-   git push origin vx.y.z
+   cargo release x.y.z --execute
    ```
-5. Publish a GitHub Release for the tag automatically using GitHub Workflow
+
+   This bumps the version in `Cargo.toml`, refreshes `Cargo.lock`, commits with
+   message `version: x.y.z`, creates a signed tag `vx.y.z`, and pushes the
+   branch and tag to `origin`. Pushing the tag triggers
+   [`.github/workflows/release.yml`](.github/workflows/release.yml), which
+   builds the release binaries and publishes a GitHub Release.
