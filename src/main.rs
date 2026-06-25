@@ -19,7 +19,7 @@ use confluence2md::utils::{
     apply_task_list_statuses, ensure_dir, make_assets_info, normalize_base_url,
     preprocess_confluence_macros, sanitize_file_name,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -206,14 +206,9 @@ async fn run() -> Result<()> {
     let token = get_required_env()?.personal_access_token;
     let client = build_http_client()?;
 
-    let page_id = match resolve_page_id_from_url(&client, &config.page_url, &base_url, &token).await
-    {
-        Ok(id) => id,
-        Err(err) => {
-            error!("failed to resolve page ID from URL: {err}");
-            std::process::exit(1);
-        }
-    };
+    let page_id = resolve_page_id_from_url(&client, &config.page_url, &base_url, &token)
+        .await
+        .context("failed to resolve page ID from URL")?;
     debug!("Resolved page ID for \"{}\": {page_id}", config.page_url);
 
     ensure_dir(&config.output_dir).await?;
