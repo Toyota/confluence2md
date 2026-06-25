@@ -64,6 +64,8 @@ struct Cli {
 
     /// Remove strikethrough text entirely instead of converting to ~~text~~.
     /// Accepts an optional value (true/false). Omitting the value implies true.
+    /// When passing a value, the equals form is required (e.g. `--remove-strikethrough-text=false`);
+    /// a space-separated value like `--remove-strikethrough-text false` is not supported.
     #[arg(
         long = "remove-strikethrough-text",
         value_parser = clap::builder::BoolishValueParser::new(),
