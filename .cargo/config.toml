@@ -1,0 +1,3 @@
+[env]
+# confluence2md tests do not support multi-threading due to environment variable sharing between test cases.
+RUST_TEST_THREADS = "1"
