@@ -77,6 +77,7 @@ Set the following environment variables before running:
 | `CONFLUENCE2MD_DUMP_STATE_PATH`       | Directory to write diagnostic state and raw intermediate files             | `dumps`   |
 | `CONFLUENCE2MD_LOG_LEVEL`             | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` (default: `INFO`) | `DEBUG`   |
 | `CONFLUENCE2MD_TABLE_CONVERSION`      | Table conversion mode: `default` \| `always` (default: `default`)          | `always`  |
+| `CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT` | Set to `true` to remove strikethrough text entirely             | `true`    |
 
 You can export them in your shell profile or pass them inline:
 
@@ -97,18 +98,20 @@ confluence2md 'https://confluence.example.com/pages/viewpage.action?pageId=39322
 
 ### Options
 
-| Option                      | Description                                                                      | Default           |
-| --------------------------- | -------------------------------------------------------------------------------- | ----------------- |
-| `--output-path <dir>`       | Directory to write the output Markdown file                                      | Current directory |
-| `--dump-state-path <dir>`   | Directory to write raw API, intermediate HTML dumps, and raw `.drawio` XML files | Not written       |
-| `--log-level <level>`       | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`                         | `INFO`            |
-| `--table-conversion <mode>` | Table conversion mode: `default` \| `always`                                     | `default`         |
-| `--version`                 | Print the version and exit                                                       | —                 |
+| Option                          | Description                                                                      | Default           |
+| ------------------------------- | -------------------------------------------------------------------------------- | ----------------- |
+| `--output-path <dir>`           | Directory to write the output Markdown file                                      | Current directory |
+| `--dump-state-path <dir>`       | Directory to write raw API, intermediate HTML dumps, and raw `.drawio` XML files | Not written       |
+| `--log-level <level>`           | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR`                         | `INFO`            |
+| `--table-conversion <mode>`     | Table conversion mode: `default` \| `always`                                     | `default`         |
+| `--remove-strikethrough-text[=true|false]` | Remove strikethrough text entirely instead of converting to `~~text~~`. Omitting the value implies `true`. When passing a value, the equals form is required (e.g. `--remove-strikethrough-text=false`). | Off               |
+| `--version`                     | Print the version and exit                                                       | —                 |
 
 > 💡 `--output-path` takes precedence over `CONFLUENCE2MD_OUTPUT_PATH`.
 > 💡 `--dump-state-path` takes precedence over `CONFLUENCE2MD_DUMP_STATE_PATH`.
 > 💡 `--log-level` takes precedence over `CONFLUENCE2MD_LOG_LEVEL`.
 > 💡 `--table-conversion` takes precedence over `CONFLUENCE2MD_TABLE_CONVERSION`.
+> 💡 `--remove-strikethrough-text` takes precedence over `CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT`.
 
 #### Table conversion modes
 

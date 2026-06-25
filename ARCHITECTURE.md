@@ -57,7 +57,7 @@ flowchart TD
     E --> F[confluence::download_images_and_rewrite_html<br/>regular img src → local assets]
     F --> G[plantuml::resolve_plantuml_diagrams<br/>imgs → fenced plantuml blocks]
     G --> H[utils::preprocess_confluence_macros<br/>code/expand/jira/lref/alerts]
-    H --> I[html::convert_to_md<br/>TOC link rewrite + htmd + custom plugins]
+    H --> I[html::convert_html_to_markdown<br/>TOC link rewrite + htmd + custom plugins]
     I --> J[Write Page_Title.md + assets]
 ```
 
@@ -70,7 +70,13 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 ### 3.1. `main.rs` — CLI Entry Point
 
 - **Responsibility:** Parse CLI flags (`clap` derive) and environment variables, set up logging, and orchestrate the conversion pipeline end-to-end.
-- **Key items:** `Cli` struct, `run()` async function (Tokio multi-thread runtime).
+- **Key items:**
+    - `Cli` struct — `clap` derive struct for all flags and positional arguments.
+    - `ResolvedConfig` struct — holds fully resolved configuration after merging CLI args and `CONFLUENCE2MD_*` environment variables.
+    - `resolve_config(cli: &Cli) -> Result<ResolvedConfig>` — resolves all configuration (paths, log level, table conversion mode, strikethrough option) from `Cli` and environment variables; also initializes the logger as a side effect.
+    - `extract_base_url(page_url: &str) -> Result<String>` — parses the page URL and returns the normalized scheme + host + port base URL.
+    - `append_markdown_header(title, page_id, webui, body) -> String` — assembles the final Markdown document from its components (front-matter header and converted body).
+    - `run()` async function — top-level pipeline orchestrator (Tokio multi-thread runtime).
 - **Inputs:** `<pageUrl>` arg, `--output-path`, `--log-level`, `--table-conversion`, plus `CONFLUENCE2MD_*` env vars.
 - **Outputs:** `Page_Title.md`, `Page_Title_assets/`. When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the raw page API snapshot (`content.json`), debug intermediates (`export.html`, `storage.html`, `rewrite_*.html`), and raw draw.io XML files (`*.drawio`) are written to that dump directory.
 
@@ -104,9 +110,9 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 
 - **Responsibility:** Convert the rewritten Confluence HTML into GitHub-Flavored Markdown.
 - **Key types:** `TableConversion` (`Default` | `Always`), `ConvertOptions`.
-- **Key function:** `convert_to_md`.
+- **Key function:** `convert_html_to_markdown`.
 - **Built on:** [`htmd`](https://crates.io/crates/htmd) and [`markup5ever_rcdom`](https://crates.io/crates/markup5ever_rcdom), with custom plugins for Confluence alert/expand/code blocks and table preprocessing.
-- **TOC behavior:** Before Markdown conversion, `convert_to_md` maps Confluence heading `id` attributes to the Markdown heading slugs generated from the heading text, then rewrites internal `<a href="#...">` links that point at those headings. This keeps Confluence TOC macro output navigable in Markdown without adding raw `<a id="..."></a>` anchors to the document.
+- **TOC behavior:** Before Markdown conversion, `convert_html_to_markdown` maps Confluence heading `id` attributes to the Markdown heading slugs generated from the heading text, then rewrites internal `<a href="#...">` links that point at those headings. This keeps Confluence TOC macro output navigable in Markdown without adding raw `<a id="..."></a>` anchors to the document.
 - **Table-conversion behavior:**
     - Both modes unwrap 1x1 tables before normal table conversion: the single cell's content is emitted as regular Markdown outside a table. This keeps block content such as PlantUML fences readable instead of forcing it into a one-cell GFM table.
     - `Default`: Markdown-compatible tables are converted to GFM; tables without `<thead>` have their first row promoted to a header. Tables with merged cells (`colspan`/`rowspan`) or nested tables are preserved as readable, pretty-printed HTML.
@@ -171,7 +177,7 @@ sequenceDiagram
     Plant-->>CLI: HTML with fenced plantuml blocks
     CLI->>Utils: preprocess_confluence_macros
     Utils-->>CLI: HTML with code/expand/alert/lref rewritten
-    CLI->>Conv: convert_to_md
+    CLI->>Conv: convert_html_to_markdown
     Conv-->>CLI: Markdown body
     CLI->>FS: write Page_Title.md
 ```
@@ -180,21 +186,21 @@ sequenceDiagram
 
 confluence2md supports a fixed set of Confluence macros. Each is detected and rewritten by a specific stage of the pipeline. The two columns below show *where* in the pipeline the macro is consumed and *what* the resulting Markdown looks like.
 
-| Macro              | Stage (module::function)                         | Resulting Markdown / HTML                                                                                                                                                                                                                                                                           |
-| ------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `drawio`           | `drawio::resolve_drawio_diagrams`                | `![alt](assets/<name>.drawio.png)` — PNG with `.drawio` XML in `tEXt`. Native page draw.io macros and rendered draw.io images inside included content are resolved through the same asset pipeline.                                                                                                 |
-| `plantuml`         | `plantuml::resolve_plantuml_diagrams`            | Fenced code block: ` ```plantuml ... ``` `                                                                                                                                                                                                                                                          |
-| `code`             | `utils::preprocess_confluence_macros` (`code`)   | Fenced code block with optional language: ` ```c++ ... ``` `                                                                                                                                                                                                                                        |
-| `expand`           | `utils::preprocess_confluence_macros` (expand)   | `<details><summary>Title</summary> ... </details>`                                                                                                                                                                                                                                                  |
-| `jira`             | `jira::replace_jira_macros`                      | Simple issue link: `[DEMO-1234](https://jira.example.com/browse/DEMO-1234)`. Storage macros derive the browse URL from rendered Jira links when available; otherwise they emit plain key text.                                                                                                      |
-| `lref-gdrive-file` | `utils::preprocess_confluence_macros` (gdrive)   | `[Google Drive Link](https://docs.google.com/...)`                                                                                                                                                                                                                                                  |
-| `info`             | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!IMPORTANT]` alert block                                                                                                                                                                                                                                                                   |
-| `panel`            | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!NOTE]` alert block                                                                                                                                                                                                                                                                        |
-| `tip`              | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!TIP]` alert block                                                                                                                                                                                                                                                                         |
-| `note`             | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!WARNING]` alert block                                                                                                                                                                                                                                                                     |
-| `warning`          | `utils::preprocess_confluence_macros` (alerts)   | GitHub `[!CAUTION]` alert block                                                                                                                                                                                                                                                                     |
-| (regular `<img>`)  | `confluence::download_images_and_rewrite_html`   | `![alt](assets/<name>.<ext>)`                                                                                                                                                                                                                                                                       |
-| (tables)           | `html::convert_to_md` (`TableConversion`) | 1x1 tables are unwrapped to their single cell content. `Default`: Markdown-compatible tables become GFM; merged/nested tables are preserved as pretty-printed HTML. `Always`: merged cells expanded to flat GFM tables; nested tables extracted after the outer table with unique markers (`(*n)`). |
+| Macro              | Stage (module::function)                             | Resulting Markdown / HTML                                                                                                                                                                                                                                                                           |
+| ------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `drawio`           | `drawio::resolve_drawio_diagrams`                    | `![alt](assets/<name>.drawio.png)` — PNG with `.drawio` XML in `tEXt`. Native page draw.io macros and rendered draw.io images inside included content are resolved through the same asset pipeline.                                                                                                 |
+| `plantuml`         | `plantuml::resolve_plantuml_diagrams`                | Fenced code block: ` ```plantuml ... ``` `                                                                                                                                                                                                                                                          |
+| `code`             | `utils::preprocess_confluence_macros` (`code`)       | Fenced code block with optional language: ` ```c++ ... ``` `                                                                                                                                                                                                                                        |
+| `expand`           | `utils::preprocess_confluence_macros` (expand)       | `<details><summary>Title</summary> ... </details>`                                                                                                                                                                                                                                                  |
+| `jira`             | `jira::replace_jira_macros`                          | Simple issue link: `[DEMO-1234](https://jira.example.com/browse/DEMO-1234)`. Storage macros derive the browse URL from rendered Jira links when available; otherwise they emit plain key text.                                                                                                      |
+| `lref-gdrive-file` | `utils::preprocess_confluence_macros` (gdrive)       | `[Google Drive Link](https://docs.google.com/...)`                                                                                                                                                                                                                                                  |
+| `info`             | `utils::preprocess_confluence_macros` (alerts)       | GitHub `[!IMPORTANT]` alert block                                                                                                                                                                                                                                                                   |
+| `panel`            | `utils::preprocess_confluence_macros` (alerts)       | GitHub `[!NOTE]` alert block                                                                                                                                                                                                                                                                        |
+| `tip`              | `utils::preprocess_confluence_macros` (alerts)       | GitHub `[!TIP]` alert block                                                                                                                                                                                                                                                                         |
+| `note`             | `utils::preprocess_confluence_macros` (alerts)       | GitHub `[!WARNING]` alert block                                                                                                                                                                                                                                                                     |
+| `warning`          | `utils::preprocess_confluence_macros` (alerts)       | GitHub `[!CAUTION]` alert block                                                                                                                                                                                                                                                                     |
+| (regular `<img>`)  | `confluence::download_images_and_rewrite_html`       | `![alt](assets/<name>.<ext>)`                                                                                                                                                                                                                                                                       |
+| (tables)           | `html::convert_html_to_markdown` (`TableConversion`) | 1x1 tables are unwrapped to their single cell content. `Default`: Markdown-compatible tables become GFM; merged/nested tables are preserved as pretty-printed HTML. `Always`: merged cells expanded to flat GFM tables; nested tables extracted after the outer table with unique markers (`(*n)`). |
 
 #### 4.2.1. draw.io flow
 
@@ -250,7 +256,7 @@ flowchart LR
     F --> G[HTML out]
 ```
 
-The alert `<div>`s use the same class names the Confluence export view would emit; `html::convert_to_md` then maps those classes to GitHub `[!IMPORTANT|NOTE|TIP|WARNING|CAUTION]` blocks during the final Markdown conversion.
+The alert `<div>`s use the same class names the Confluence export view would emit; `html::convert_html_to_markdown` then maps those classes to GitHub `[!IMPORTANT|NOTE|TIP|WARNING|CAUTION]` blocks during the final Markdown conversion.
 
 Jira storage macros do not carry a browse URL. `jira::replace_jira_macros` derives the browse base from rendered Jira issue links already present in the REST response, avoiding any hardcoded Jira instance. Rendered issue spans are normalized to only the issue-key link so placeholder summary/status text is not emitted to Markdown.
 

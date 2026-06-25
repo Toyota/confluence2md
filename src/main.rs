@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser, builder::TypedValueParser};
 
 use confluence2md::confluence::{
     DownloadImagesOptions, build_attachment_maps, build_http_client,
@@ -12,14 +12,14 @@ use confluence2md::confluence::{
     resolve_page_id_from_url,
 };
 use confluence2md::drawio::{ResolveDrawioOptions, resolve_drawio_diagrams};
-use confluence2md::html::{ConvertOptions, TableConversion, convert_to_md};
+use confluence2md::html::{ConvertOptions, TableConversion, convert_html_to_markdown};
 use confluence2md::logger::{self, parse_log_level};
 use confluence2md::plantuml::{ResolvePlantUmlOptions, resolve_plantuml_diagrams};
 use confluence2md::utils::{
     apply_task_list_statuses, ensure_dir, make_assets_info, normalize_base_url,
     preprocess_confluence_macros, sanitize_file_name,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -36,6 +36,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
         "  CONFLUENCE2MD_DUMP_STATE_PATH        dump-state directory (overridden by --dump-state-path)\n",
         "  CONFLUENCE2MD_LOG_LEVEL              log level (overridden by --log-level)\n",
         "  CONFLUENCE2MD_TABLE_CONVERSION       table conversion mode (overridden by --table-conversion)\n",
+        "  CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT  set to \"true\" to remove strikethrough text\n",
+        "                                           (overridden by --remove-strikethrough-text)\n",
         "\n",
         "Example:\n",
         "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN=\"xxx\" \\\n",
@@ -60,31 +62,43 @@ struct Cli {
     #[arg(long = "table-conversion", value_name = "MODE")]
     table_conversion: Option<String>,
 
+    /// Remove strikethrough text entirely instead of converting to ~~text~~.
+    /// Accepts an optional value (true/false). Omitting the value implies true.
+    /// When passing a value, the equals form is required (e.g. `--remove-strikethrough-text=false`);
+    /// a space-separated value like `--remove-strikethrough-text false` is not supported.
+    #[arg(
+        long = "remove-strikethrough-text",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        require_equals = true
+    )]
+    remove_strikethrough_text: Option<bool>,
+
     /// Confluence page URL.
     page_url: Option<String>,
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(err) = run().await {
-        error!("{err:#}");
-        std::process::exit(1);
-    }
+/// Resolved configuration from CLI arguments and environment variables.
+#[derive(Debug)]
+struct ResolvedConfig {
+    page_url: String,
+    output_dir: PathBuf,
+    dump_state_dir: Option<PathBuf>,
+    log_level: logger::LogLevel,
+    table_conversion: TableConversion,
+    remove_strikethrough_text: bool,
 }
 
-async fn run() -> Result<()> {
-    let cli = Cli::parse();
-
-    let level = if let Some(level_str) = cli
+/// Resolves all configuration from CLI arguments and environment variables.
+fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
+    let log_level = cli
         .log_level
         .clone()
         .or_else(|| std::env::var("CONFLUENCE2MD_LOG_LEVEL").ok())
-    {
-        parse_log_level(&level_str).context("parsing log level")?
-    } else {
-        logger::LogLevel::Info
-    };
-    logger::init(level);
+        .map(|s| parse_log_level(&s).context("parsing log level"))
+        .transpose()?
+        .unwrap_or(logger::LogLevel::Info);
 
     let table_mode_str = cli
         .table_conversion
@@ -103,7 +117,7 @@ async fn run() -> Result<()> {
         anyhow::anyhow!("Missing required <pageUrl> argument. Use --help for usage.")
     })?;
 
-    let output_dir_input = cli
+    let output_dir = cli
         .output_path
         .clone()
         .or_else(|| {
@@ -112,7 +126,7 @@ async fn run() -> Result<()> {
                 .map(PathBuf::from)
         })
         .unwrap_or_else(|| PathBuf::from("."));
-    let output_dir = absolutize_path(output_dir_input)?;
+
     let dump_state_dir = cli
         .dump_state_path
         .clone()
@@ -124,50 +138,101 @@ async fn run() -> Result<()> {
         .map(absolutize_path)
         .transpose()?;
 
-    let parsed_url = url::Url::parse(&page_url).context("Invalid page URL")?;
+    let remove_strikethrough_text = cli
+        .remove_strikethrough_text
+        .map(Ok)
+        .or_else(|| {
+            std::env::var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT")
+                .ok()
+                .map(|value| {
+                    clap::builder::BoolishValueParser::new()
+                        .parse_ref(&Cli::command(), None, std::ffi::OsStr::new(&value))
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "Invalid CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT value: \"{value}\". \
+                                 Must be \"true\", \"false\", \"1\", \"0\", \"yes\", \"no\", \"on\", or \"off\"."
+                            )
+                        })
+                })
+        })
+        .transpose()?
+        .unwrap_or(false);
+
+    Ok(ResolvedConfig {
+        page_url,
+        output_dir: absolutize_path(output_dir)?,
+        dump_state_dir,
+        log_level,
+        table_conversion,
+        remove_strikethrough_text,
+    })
+}
+
+/// Extracts and normalizes the base URL (scheme + host + optional port) from a page URL.
+fn extract_base_url(page_url: &str) -> Result<String> {
+    let parsed = url::Url::parse(page_url).context("Invalid page URL")?;
     let origin = format!(
         "{}://{}{}",
-        parsed_url.scheme(),
-        parsed_url.host_str().unwrap_or(""),
-        parsed_url
-            .port()
-            .map(|p| format!(":{p}"))
-            .unwrap_or_default()
+        parsed.scheme(),
+        parsed.host_str().unwrap_or(""),
+        parsed.port().map(|p| format!(":{p}")).unwrap_or_default()
     );
-    let base_url = normalize_base_url(&origin);
-    let env = get_required_env()?;
-    let token = env.personal_access_token;
+    Ok(normalize_base_url(&origin))
+}
 
+fn append_markdown_header(title: &str, page_id: &str, webui: Option<&str>, body: &str) -> String {
+    let mut markdown = format!("# {title}\n\n- Confluence Page ID: {page_id}\n");
+    if let Some(url) = webui {
+        markdown.push_str(&format!("- URL: {url}\n"));
+    }
+    markdown.push_str("\n---\n\n");
+    markdown.push_str(body);
+    markdown.push('\n');
+    markdown
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("Error: {err:#}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
+    let cli = Cli::parse();
+    let config = resolve_config(&cli)?;
+    logger::init(config.log_level);
+
+    let base_url = extract_base_url(&config.page_url)?;
+    let token = get_required_env()?.personal_access_token;
     let client = build_http_client()?;
 
-    let page_id = match resolve_page_id_from_url(&client, &page_url, &base_url, &token).await {
-        Ok(id) => id,
-        Err(err) => {
-            error!("failed to resolve page ID from URL: {err}");
-            std::process::exit(1);
-        }
-    };
-    debug!("Resolved page ID for \"{page_url}\": {page_id}");
+    let page_id = resolve_page_id_from_url(&client, &config.page_url, &base_url, &token)
+        .await
+        .context("failed to resolve page ID from URL")?;
+    debug!("Resolved page ID for \"{}\": {page_id}", config.page_url);
 
-    ensure_dir(&output_dir).await?;
-    if let Some(dir) = &dump_state_dir {
+    ensure_dir(&config.output_dir).await?;
+    if let Some(dir) = &config.dump_state_dir {
         ensure_dir(dir).await?;
     }
 
     let page = fetch_confluence_page(&client, &page_id, &base_url, &token).await?;
-    write_dump_state(&dump_state_dir, "content.json", &page.content_json).await?;
+    write_dump_state(&config.dump_state_dir, "content.json", &page.content_json).await?;
 
     let title = if page.title.is_empty() {
         format!("page-{page_id}")
     } else {
         page.title.clone()
     };
-    let output_file_name = format!("{}.md", sanitize_file_name(&title));
-    let output_path = output_dir.join(&output_file_name);
+    let output_path = config
+        .output_dir
+        .join(format!("{}.md", sanitize_file_name(&title)));
 
-    write_dump_state(&dump_state_dir, "export.html", &page.export_html).await?;
+    write_dump_state(&config.dump_state_dir, "export.html", &page.export_html).await?;
     write_dump_state(
-        &dump_state_dir,
+        &config.dump_state_dir,
         "storage.html",
         page.storage_html.as_deref().unwrap_or(""),
     )
@@ -176,11 +241,10 @@ async fn run() -> Result<()> {
     let attachments = list_attachments(&client, &page_id, &base_url, &token).await?;
     let maps = build_attachment_maps(&attachments);
 
-    let mut html_for_markdown: String = page.export_html.clone();
-
     let assets_info = make_assets_info(&page_id, &title, &output_path);
     ensure_dir(&assets_info.assets_abs_dir).await?;
 
+    let mut html = page.export_html.clone();
     let mut used_names: HashSet<String> = HashSet::new();
 
     let drawio_result = resolve_drawio_diagrams(
@@ -188,23 +252,23 @@ async fn run() -> Result<()> {
         ResolveDrawioOptions {
             page_id: &page_id,
             storage_html: page.storage_html.as_deref(),
-            export_html: &html_for_markdown,
+            export_html: &html,
             attachments_by_title: &maps.by_title,
             base_url: &base_url,
             token: &token,
             assets_abs_dir: &assets_info.assets_abs_dir,
-            dump_state_abs_dir: dump_state_dir.as_deref(),
+            dump_state_abs_dir: config.dump_state_dir.as_deref(),
             markdown_image_prefix: &assets_info.markdown_image_prefix,
             used_names: &mut used_names,
         },
     )
     .await?;
-    html_for_markdown = drawio_result.0;
-    write_dump_state(&dump_state_dir, "rewrite_drawio.html", &html_for_markdown).await?;
+    html = drawio_result.0;
+    write_dump_state(&config.dump_state_dir, "rewrite_drawio.html", &html).await?;
 
-    html_for_markdown = download_images_and_rewrite_html(
+    html = download_images_and_rewrite_html(
         &client,
-        &html_for_markdown,
+        &html,
         DownloadImagesOptions {
             base_url: &base_url,
             personal_access_token: &token,
@@ -214,14 +278,14 @@ async fn run() -> Result<()> {
         },
     )
     .await?;
-    write_dump_state(&dump_state_dir, "rewrite_image.html", &html_for_markdown).await?;
+    write_dump_state(&config.dump_state_dir, "rewrite_image.html", &html).await?;
 
     let plantuml_result = resolve_plantuml_diagrams(
         &client,
         ResolvePlantUmlOptions {
             page_id: &page_id,
             storage_html: page.storage_html.as_deref(),
-            html: &html_for_markdown,
+            html: &html,
             attachments_by_title: &maps.by_title,
             base_url: &base_url,
             token: &token,
@@ -231,34 +295,28 @@ async fn run() -> Result<()> {
         },
     )
     .await?;
-    html_for_markdown = plantuml_result.0;
-    write_dump_state(&dump_state_dir, "rewrite_plantuml.html", &html_for_markdown).await?;
+    html = plantuml_result.0;
+    write_dump_state(&config.dump_state_dir, "rewrite_plantuml.html", &html).await?;
 
     if let Some(storage_html) = page.storage_html.as_deref() {
-        html_for_markdown = apply_task_list_statuses(&html_for_markdown, storage_html);
+        html = apply_task_list_statuses(&html, storage_html);
     }
-    html_for_markdown = preprocess_confluence_macros(&html_for_markdown);
-    write_dump_state(&dump_state_dir, "rewrite_macros.html", &html_for_markdown).await?;
+    html = preprocess_confluence_macros(&html);
+    write_dump_state(&config.dump_state_dir, "rewrite_macros.html", &html).await?;
 
-    let markdown_body = convert_to_md(&html_for_markdown, ConvertOptions { table_conversion });
+    let markdown_body = convert_html_to_markdown(
+        &html,
+        ConvertOptions {
+            table_conversion: config.table_conversion,
+            remove_strikethrough_text: config.remove_strikethrough_text,
+        },
+    );
 
-    let mut markdown = String::new();
-    markdown.push_str(&format!("# {title}\n"));
-    markdown.push('\n');
-    markdown.push_str(&format!("- Confluence Page ID: {page_id}\n"));
-    if let Some(webui) = &page.webui {
-        markdown.push_str(&format!("- URL: {webui}\n"));
-    }
-    markdown.push('\n');
-    markdown.push_str("---\n");
-    markdown.push('\n');
-    markdown.push_str(&markdown_body);
-    markdown.push('\n');
-
+    let markdown = append_markdown_header(&title, &page_id, page.webui.as_deref(), &markdown_body);
     tokio::fs::write(&output_path, markdown).await?;
     info!("Written: {}", output_path.display());
     info!("Assets: {}", assets_info.assets_abs_dir.display());
-    if let Some(dir) = &dump_state_dir {
+    if let Some(dir) = &config.dump_state_dir {
         info!("Dump state: {}", dir.display());
     }
 
@@ -278,4 +336,325 @@ async fn write_dump_state(dir: &Option<PathBuf>, file_name: &str, contents: &str
         tokio::fs::write(dir.join(file_name), contents).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── helpers ──────────────────────────────────────────────────────────────
+
+    fn make_cli(
+        page_url: Option<&str>,
+        output_path: Option<&str>,
+        dump_state_path: Option<&str>,
+        log_level: Option<&str>,
+        table_conversion: Option<&str>,
+        remove_strikethrough_text: Option<bool>,
+    ) -> Cli {
+        Cli {
+            page_url: page_url.map(str::to_owned),
+            output_path: output_path.map(PathBuf::from),
+            dump_state_path: dump_state_path.map(PathBuf::from),
+            log_level: log_level.map(str::to_owned),
+            table_conversion: table_conversion.map(str::to_owned),
+            remove_strikethrough_text,
+        }
+    }
+
+    // ── resolve_config ───────────────────────────────────────────────────────
+
+    #[test]
+    fn resolve_config_missing_page_url_returns_error() {
+        let cli = make_cli(None, None, None, None, None, None);
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("Missing required <pageUrl>"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_invalid_table_conversion_returns_error() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            Some("invalid"),
+            None,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid --table-conversion"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_defaults_output_dir_to_absolute_path() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(
+            config.output_dir.is_absolute(),
+            "output_dir should be absolute, got: {:?}",
+            config.output_dir
+        );
+    }
+
+    #[test]
+    fn resolve_config_explicit_absolute_output_path() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            Some("/tmp/out"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert_eq!(config.output_dir, PathBuf::from("/tmp/out"));
+    }
+
+    #[test]
+    fn resolve_config_table_conversion_always() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            Some("always"),
+            None,
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(matches!(config.table_conversion, TableConversion::Always));
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_flag() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            Some(true),
+        );
+        let config = resolve_config(&cli).unwrap();
+        assert!(config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "true") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let config = resolve_config(&cli).unwrap();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_cli_false_overrides_env_var() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "true") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            Some(false),
+        );
+        let config = resolve_config(&cli).unwrap();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(!config.remove_strikethrough_text);
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_truthy_values() {
+        for value in &["1", "yes", "on", "TRUE"] {
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", value) };
+            let cli = make_cli(
+                Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let config = resolve_config(&cli).unwrap();
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+            assert!(
+                config.remove_strikethrough_text,
+                "expected true for env var value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_falsy_values() {
+        for value in &["0", "no", "off", "FALSE"] {
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", value) };
+            let cli = make_cli(
+                Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let config = resolve_config(&cli).unwrap();
+            // SAFETY: test-only; single-threaded test environment
+            unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+            assert!(
+                !config.remove_strikethrough_text,
+                "expected false for env var value {value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_config_remove_strikethrough_env_var_invalid_value_returns_error() {
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::set_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT", "invalid") };
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        // SAFETY: test-only; single-threaded test environment
+        unsafe { std::env::remove_var("CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT") };
+        assert!(
+            err.to_string()
+                .contains("Invalid CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn resolve_config_invalid_log_level_returns_error() {
+        let cli = make_cli(
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=1"),
+            None,
+            None,
+            Some("TRACE"),
+            None,
+            None,
+        );
+        let err = resolve_config(&cli).unwrap_err();
+        assert!(
+            err.to_string().contains("parsing log level"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── extract_base_url ─────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_base_url_standard_https() {
+        let url = "https://confluence.example.com/pages/viewpage.action?pageId=1";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://confluence.example.com"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_retains_explicit_port() {
+        let url = "https://confluence.example.com:8443/pages/viewpage.action?pageId=1";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://confluence.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_strips_path_and_query() {
+        let url = "http://confluence.example.com/wiki/spaces/PROJ/pages/123/Title?foo=bar";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "http://confluence.example.com"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_invalid_url_returns_error() {
+        let err = extract_base_url("not-a-url").unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid page URL"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // ── append_markdown_header ───────────────────────────────────────────────
+
+    #[test]
+    fn append_markdown_header_produces_h1_title() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(md.starts_with("# My Page\n"), "got: {md:?}");
+    }
+
+    #[test]
+    fn append_markdown_header_includes_page_id() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(md.contains("- Confluence Page ID: 12345\n"));
+    }
+
+    #[test]
+    fn append_markdown_header_includes_webui_url_when_present() {
+        let md = append_markdown_header(
+            "My Page",
+            "12345",
+            Some("https://confluence.example.com/pages/viewpage.action?pageId=12345"),
+            "body",
+        );
+        assert!(md.contains(
+            "- URL: https://confluence.example.com/pages/viewpage.action?pageId=12345\n"
+        ));
+    }
+
+    #[test]
+    fn append_markdown_header_omits_url_line_when_webui_is_none() {
+        let md = append_markdown_header("My Page", "12345", None, "body");
+        assert!(!md.contains("- URL:"), "unexpected URL line in: {md:?}");
+    }
+
+    #[test]
+    fn append_markdown_header_contains_body_after_separator() {
+        let md = append_markdown_header("Title", "1", None, "## Section\n\nContent here.");
+        let sep_pos = md.find("---\n").expect("separator not found");
+        let after_sep = &md[sep_pos + 4..];
+        assert!(after_sep.contains("## Section"));
+        assert!(after_sep.contains("Content here."));
+    }
+
+    #[test]
+    fn append_markdown_header_ends_with_newline() {
+        let md = append_markdown_header("Title", "1", None, "body");
+        assert!(md.ends_with('\n'));
+    }
 }

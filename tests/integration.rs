@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use confluence2md::drawio::{extract_drawio_diagram_names, replace_drawio_img_srcs};
-use confluence2md::html::{ConvertOptions, TableConversion, convert_to_md};
+use confluence2md::html::{ConvertOptions, TableConversion, convert_html_to_markdown};
 use confluence2md::plantuml::{extract_plantuml_sources, replace_plantuml_imgs_with_code};
 use confluence2md::utils::{
     apply_task_list_statuses, preprocess_confluence_macros, sanitize_file_name,
@@ -65,7 +65,7 @@ fn sanitize_file_name_handles_fixture_title() {
 fn converts_export_view_html_from_fixture() {
     let html = export_view();
     assert!(!html.is_empty());
-    let md = convert_to_md(html, ConvertOptions::default());
+    let md = convert_html_to_markdown(html, ConvertOptions::default());
     assert!(!md.is_empty());
     assert!(
         md.lines()
@@ -77,7 +77,7 @@ fn converts_export_view_html_from_fixture() {
 
 #[test]
 fn output_contains_expected_section_headings() {
-    let md = convert_to_md(export_view(), ConvertOptions::default());
+    let md = convert_html_to_markdown(export_view(), ConvertOptions::default());
     assert!(md.contains("背景"));
     assert!(md.contains("PlantUML"));
     assert!(md.contains("Draw.io"));
@@ -85,7 +85,7 @@ fn output_contains_expected_section_headings() {
 
 #[test]
 fn output_preserves_table_content() {
-    let md = convert_to_md(export_view(), ConvertOptions::default());
+    let md = convert_html_to_markdown(export_view(), ConvertOptions::default());
     assert!(md.contains("列１"));
     assert!(md.contains("列５"));
 }
@@ -94,7 +94,7 @@ fn output_preserves_table_content() {
 fn storage_html_is_also_convertible() {
     let html = storage();
     assert!(!html.is_empty());
-    let md = convert_to_md(html, ConvertOptions::default());
+    let md = convert_html_to_markdown(html, ConvertOptions::default());
     assert!(!md.is_empty());
 }
 
@@ -142,21 +142,21 @@ fn extract_plantuml_sources_returns_expected_blocks() {
 fn rewriting_plantuml_imgs_produces_valid_fenced_blocks() {
     let sources = extract_plantuml_sources(Some(storage()));
     let rewritten = replace_plantuml_imgs_with_code(export_view(), &sources);
-    let md = convert_to_md(&rewritten, ConvertOptions::default());
+    let md = convert_html_to_markdown(&rewritten, ConvertOptions::default());
     let count = md.matches("@startuml").count();
     assert_eq!(count, 2, "expected 2 @startuml occurrences, got {count}");
     assert!(md.contains("```plantuml"));
 }
 
-// ── End-to-end macro preprocessing + convert_to_md ────────────────────
+// ── End-to-end macro preprocessing + convert_html_to_markdown ────────────────────
 
 #[test]
-fn code_macro_roundtrip_via_preprocess_and_convert_to_md() {
+fn code_macro_roundtrip_via_preprocess_and_convert_html_to_markdown() {
     let html = r#"<ac:structured-macro ac:name="code"><ac:parameter ac:name="language">rust</ac:parameter><ac:plain-text-body><![CDATA[fn main() {
     let x = 1;
 }]]></ac:plain-text-body></ac:structured-macro>"#;
     let processed = preprocess_confluence_macros(html);
-    let md = convert_to_md(&processed, ConvertOptions::default());
+    let md = convert_html_to_markdown(&processed, ConvertOptions::default());
     assert!(md.contains("```rust"));
     assert!(md.contains("fn main()"));
     assert!(md.contains("let x = 1;"));
@@ -166,7 +166,7 @@ fn code_macro_roundtrip_via_preprocess_and_convert_to_md() {
 fn info_macro_renders_as_important_callout() {
     let html = r#"<ac:structured-macro ac:name="info"><ac:rich-text-body><p>Important info.</p></ac:rich-text-body></ac:structured-macro>"#;
     let processed = preprocess_confluence_macros(html);
-    let md = convert_to_md(&processed, ConvertOptions::default());
+    let md = convert_html_to_markdown(&processed, ConvertOptions::default());
     assert!(md.contains("> [!IMPORTANT]"));
     assert!(md.contains("> Important info."));
 }
@@ -175,7 +175,7 @@ fn info_macro_renders_as_important_callout() {
 fn warning_macro_renders_as_warning_callout() {
     let html = r#"<ac:structured-macro ac:name="warning"><ac:rich-text-body><p>Beware.</p></ac:rich-text-body></ac:structured-macro>"#;
     let processed = preprocess_confluence_macros(html);
-    let md = convert_to_md(&processed, ConvertOptions::default());
+    let md = convert_html_to_markdown(&processed, ConvertOptions::default());
     assert!(md.contains("> [!CAUTION]"));
 }
 
@@ -183,7 +183,7 @@ fn warning_macro_renders_as_warning_callout() {
 fn expand_macro_renders_as_details_summary() {
     let html = r#"<ac:structured-macro ac:name="expand"><ac:parameter ac:name="title">Click</ac:parameter><ac:rich-text-body><p>Hidden.</p></ac:rich-text-body></ac:structured-macro>"#;
     let processed = preprocess_confluence_macros(html);
-    let md = convert_to_md(&processed, ConvertOptions::default());
+    let md = convert_html_to_markdown(&processed, ConvertOptions::default());
     assert!(md.contains("<details>"));
     assert!(md.contains("<summary>Click</summary>"));
     assert!(md.contains("Hidden."));
@@ -199,7 +199,7 @@ fn inline_tasks_render_as_markdown_checkboxes() {
 
     let annotated = apply_task_list_statuses(rendered, storage);
     let processed = preprocess_confluence_macros(&annotated);
-    let md = convert_to_md(&processed, ConvertOptions::default());
+    let md = convert_html_to_markdown(&processed, ConvertOptions::default());
 
     assert!(md.contains("- [x] done"), "{md}");
     assert!(md.contains("- [ ] todo"), "{md}");
@@ -208,10 +208,11 @@ fn inline_tasks_render_as_markdown_checkboxes() {
 #[test]
 fn always_table_mode_unwraps_single_cell_table() {
     let html = "<table><tbody><tr><td>Only cell</td></tr></tbody></table>";
-    let md = convert_to_md(
+    let md = convert_html_to_markdown(
         html,
         ConvertOptions {
             table_conversion: TableConversion::Always,
+            ..ConvertOptions::default()
         },
     );
     assert_eq!(md, "Only cell\n");
