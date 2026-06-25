@@ -40,7 +40,11 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        shell: bash
+        run: |
+          git clone --depth 1 ${{ github.server_url }}/${{ github.repository }} .
+          git fetch origin ${{ github.sha }}
+          git checkout ${{ github.sha }}
 
       - name: Install Rust toolchain
         run: |
