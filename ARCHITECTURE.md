@@ -85,7 +85,7 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 - **Responsibility:** Talk to the Confluence REST API v1 and download regular binary assets referenced by the page HTML. draw.io and PlantUML assets are resolved by their dedicated modules first.
 - **Key types:** `EnvConfig`, `PageResult`, `Attachment`, `AttachmentMaps`, `DownloadBinaryOptions`, `DownloadAttachmentOptions`, `DownloadImagesOptions`.
 - **Key functions:**
-    - `build_http_client` — `reqwest` client with `rustls-tls`.
+    - `build_http_client` — `reqwest` client backed by `rustls`. Trust anchors come from both the bundled Mozilla WebPKI root set (`rustls-tls-webpki-roots`) and the host OS certificate store (`rustls-tls-native-roots`); the two sets are merged so corporate / internal CAs trusted by the host work without configuration, and minimal container images without a system CA bundle still work via the bundled roots.
     - `get_required_env` — reads the personal access token from `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN`.
     - `resolve_page_id_from_url` — supports `pageId`, `/spaces/.../pages/<id>/`, `/display/<space>/<title>`, and `spaceKey`+`title` URL formats.
     - `fetch_confluence_page` — fetches the page with `body.export_view` and `body.storage` expansions.
@@ -310,7 +310,7 @@ No other external services are called.
 ## 8. Security Considerations
 
 - **Authentication:** Confluence Personal Access Token, read from `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN`. Never logged.
-- **Transport:** HTTPS via `reqwest` with `rustls-tls` (no OpenSSL dependency).
+- **Transport:** HTTPS via `reqwest` with `rustls` (no OpenSSL dependency). Trust anchors are the union of the bundled Mozilla WebPKI root set and the host OS certificate store, so the binary works on minimal container images (no system CA bundle required) and also honors corporate / internal CAs that the host already trusts. This means corporate TLS-inspection proxies whose root CA is installed in the OS store will be silently traversed, which is the standard tradeoff for tools that respect the OS trust store.
 - **Authorization:** Whatever the token's owner can read in Confluence.
 - **Sandbox:** Output is restricted to the resolved `--output-path` directory. `sanitize_file_name` strips path separators and forbidden characters to prevent path traversal in attachment titles.
 - **No `unsafe`:** The crate compiles without `unsafe` blocks; lints are enforced with `-D warnings`.

@@ -176,6 +176,6 @@ confluence2md automatically detects the page from various Confluence URL formats
 | Runtime      | [Rust](https://www.rust-lang.org/) (stable, 2024 edition) with [Tokio](https://tokio.rs/)                   |
 | Language     | Rust                                                                                                        |
 | HTML parsing | [`htmd`](https://crates.io/crates/htmd) + [`markup5ever_rcdom`](https://crates.io/crates/markup5ever_rcdom) |
-| HTTP client  | [`reqwest`](https://crates.io/crates/reqwest) with `rustls-tls`                                             |
+| HTTP client  | [`reqwest`](https://crates.io/crates/reqwest) with `rustls` (bundled Mozilla WebPKI roots + OS certificate store) |
 | CLI parsing  | [`clap`](https://crates.io/crates/clap) (derive macros)                                                     |
 | API          | [Confluence REST API v1](https://developer.atlassian.com/cloud/confluence/rest/v1/intro/#about)             |
