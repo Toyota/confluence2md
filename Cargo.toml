@@ -1,6 +1,6 @@
 [package]
 name = "confluence2md"
-version = "2.3.1"
+version = "2.4.0"
 edition = "2024"
 rust-version = "1.95"
 description = "Convert Confluence pages to clean, portable Markdown."
