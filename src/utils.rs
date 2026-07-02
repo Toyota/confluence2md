@@ -313,7 +313,7 @@ pub fn make_assets_info(page_id: &str, title: &str, output_path: &Path) -> Asset
 
 // `encodeURIComponent` percent-encodes everything that is not in the unreserved
 // set `A-Z a-z 0-9 - _ . ! ~ * ' ( )`. Construct the inverse `AsciiSet`.
-const URI_COMPONENT: AsciiSet = NON_ALPHANUMERIC
+pub const URI_COMPONENT: AsciiSet = NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'_')
     .remove(b'.')
