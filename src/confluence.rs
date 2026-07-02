@@ -444,18 +444,19 @@ pub async fn download_images_and_rewrite_html(
     }
 
     static REPLACE_RE: Lazy<Regex> =
-        Lazy::new(|| Regex::new(r#"(?is)(<img\b[^>]*\bsrc=)(["'])(.*?)(["'])"#).unwrap());
+        Lazy::new(|| Regex::new(r#"(?is)(<img\b[^>]*\bsrc=)(?:"([^"]*)"|'([^']*)')"#).unwrap());
 
     let result = REPLACE_RE.replace_all(html, |caps: &regex::Captures<'_>| {
         let prefix = &caps[1];
-        let quote_open = &caps[2];
-        let src = &caps[3];
-        let quote_close = &caps[4];
-        if quote_open != quote_close {
+        let (quote, src) = if let Some(m) = caps.get(2) {
+            ('"', m.as_str())
+        } else if let Some(m) = caps.get(3) {
+            ('\'', m.as_str())
+        } else {
             return caps[0].to_owned();
-        }
+        };
         match src_to_local.get(src) {
-            Some(local) => format!("{prefix}{quote_open}{local}{quote_close}"),
+            Some(local) => format!("{prefix}{quote}{local}{quote}"),
             None => caps[0].to_owned(),
         }
     });
@@ -706,6 +707,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(id, "777888");
+    }
+
+    #[tokio::test]
+    async fn rewrite_html_rewrites_image_src_when_url_contains_apostrophe() {
+        let server = MockServer::start().await;
+        // Confluence embeds the raw page title (with apostrophe) in the URL.
+        let img_path = "/download/attachments/123/My%20team's%20page/image.png";
+        Mock::given(method("GET"))
+            .and(path(img_path))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"\x89PNG\r\n\x1a\n"))
+            .mount(&server)
+            .await;
+
+        let html = format!(r#"<img src="{}{}" />"#, server.uri(), img_path);
+
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "confluence2md_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let assets_dir = tmp_dir.join("assets");
+        let client = Client::new();
+        let mut used = HashSet::new();
+        let result = download_images_and_rewrite_html(
+            &client,
+            &html,
+            DownloadImagesOptions {
+                base_url: &server.uri(),
+                personal_access_token: "token",
+                assets_abs_dir: &assets_dir,
+                markdown_image_prefix: "assets",
+                used_names: &mut used,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !result.contains(&server.uri()),
+            "src should be rewritten to local path, got: {result}"
+        );
+        assert!(
+            result.contains("assets"),
+            "src should point into assets dir, got: {result}"
+        );
     }
 
     #[tokio::test]
