@@ -15,8 +15,8 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::utils::{
-    HeaderHints, decode_html_attribute, ensure_dir, get_file_name_from_url_or_headers, resolve_url,
-    to_markdown_asset_path,
+    HeaderHints, URI_COMPONENT, decode_html_attribute, ensure_dir,
+    get_file_name_from_url_or_headers, resolve_url, to_markdown_asset_path,
 };
 
 // ── Public types ───────────────────────────────────────────────────
@@ -464,7 +464,7 @@ pub async fn download_images_and_rewrite_html(
 }
 
 fn is_local_markdown_asset(src: &str, markdown_image_prefix: &str) -> bool {
-    let encoded_prefix = utf8_percent_encode(markdown_image_prefix, PATH_SEGMENT).to_string();
+    let encoded_prefix = utf8_percent_encode(markdown_image_prefix, &URI_COMPONENT).to_string();
     src.starts_with(&format!("{markdown_image_prefix}/"))
         || src.starts_with(&format!("{encoded_prefix}%2F"))
 }
@@ -728,5 +728,38 @@ mod tests {
         assert_eq!(page.content_json, body);
         assert_eq!(page.export_html, "<p>export</p>");
         assert_eq!(page.storage_html.as_deref(), Some("<p>storage</p>"));
+    }
+
+    // Regression test for: is_local_markdown_asset fails when the markdown_image_prefix
+    // contains an apostrophe because the old code used PATH_SEGMENT encoding (which
+    // encodes `'` → `%27`) while to_markdown_asset_path uses URI_COMPONENT encoding
+    // (which keeps `'` as a literal). The mismatch caused local draw.io / image assets
+    // to be treated as remote URLs and re-downloaded.
+    #[test]
+    fn is_local_markdown_asset_recognizes_apostrophe_in_prefix() {
+        let prefix = "confluence2md's_test_assets";
+        let src = to_markdown_asset_path(prefix, "single.drawio.png");
+        // With the old PATH_SEGMENT encoding, encoded_prefix would contain %27 instead
+        // of the literal apostrophe used by to_markdown_asset_path, so starts_with
+        // would return false and this assertion would fail.
+        assert!(
+            is_local_markdown_asset(&src, prefix),
+            "local asset not recognized (apostrophe in prefix): {src}"
+        );
+    }
+
+    #[test]
+    fn is_local_markdown_asset_recognizes_plain_prefix() {
+        let prefix = "my_page_assets";
+        let src = to_markdown_asset_path(prefix, "image.png");
+        assert!(is_local_markdown_asset(&src, prefix));
+    }
+
+    #[test]
+    fn is_local_markdown_asset_rejects_remote_url() {
+        assert!(!is_local_markdown_asset(
+            "https://example.com/image.png",
+            "my_page_assets"
+        ));
     }
 }
