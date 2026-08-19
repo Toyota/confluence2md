@@ -8,7 +8,7 @@ use clap::{CommandFactory, Parser, builder::TypedValueParser};
 
 use confluence2md::confluence::{
     DownloadImagesOptions, build_attachment_maps, build_http_client,
-    download_images_and_rewrite_html, fetch_confluence_page, get_required_env, list_attachments,
+    download_images_and_rewrite_html, fetch_confluence_page, list_attachments, resolve_auth,
     resolve_page_id_from_url,
 };
 use confluence2md::drawio::{ResolveDrawioOptions, resolve_drawio_diagrams};
@@ -31,7 +31,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
     long_about = None,
         after_help = concat!(
         "Environment variables:\n",
-        "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN  personal access token\n",
+        "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN  Personal Access Token for Bearer auth (Data Center)\n",
+        "  CONFLUENCE2MD_USERNAME               Atlassian account email for Basic auth (Cloud)\n",
+        "  CONFLUENCE2MD_API_TOKEN              Atlassian Cloud API token for Basic auth (Cloud)\n",
         "  CONFLUENCE2MD_OUTPUT_PATH            output directory (overridden by --output-path)\n",
         "  CONFLUENCE2MD_DUMP_STATE_PATH        dump-state directory (overridden by --dump-state-path)\n",
         "  CONFLUENCE2MD_LOG_LEVEL              log level (overridden by --log-level)\n",
@@ -39,10 +41,22 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
         "  CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT  set to \"true\" to remove strikethrough text\n",
         "                                           (overridden by --remove-strikethrough-text)\n",
         "\n",
-        "Example:\n",
-        "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN=\"xxx\" \\\n",
-        "  confluence2md --output-path out ",
-        "'https://confluence.example.com/pages/viewpage.action?pageId=393229'",
+        "Authentication priority:\n",
+        "  If CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN is set, it is used for Bearer auth.\n",
+        "  Otherwise, CONFLUENCE2MD_USERNAME and CONFLUENCE2MD_API_TOKEN are used together\n",
+        "  for Atlassian Cloud authentication via HTTP Basic Auth (API token as password).\n",
+        "\n",
+        "Examples:\n",
+        "  # Bearer auth with Personal Access Token (Data Center):\n",
+        "  CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN=\"your-pat\" \\\n",
+        "  confluence2md --output-path out \\\n",
+        "    'https://confluence.example.com/pages/viewpage.action?pageId=393229'\n",
+        "\n",
+        "  # Basic auth with Cloud API token:\n",
+        "  CONFLUENCE2MD_USERNAME=\"user@example.com\" \\\n",
+        "  CONFLUENCE2MD_API_TOKEN=\"your-api-token\" \\\n",
+        "  confluence2md --output-path out \\\n",
+        "    'https://mysite.atlassian.net/wiki/spaces/TEAM/pages/123456'",
         ),
 )]
 struct Cli {
@@ -168,7 +182,15 @@ fn resolve_config(cli: &Cli) -> Result<ResolvedConfig> {
     })
 }
 
-/// Extracts and normalizes the base URL (scheme + host + optional port) from a page URL.
+/// Extracts and normalizes the base URL from a page URL.
+///
+/// For Cloud URLs that contain `/wiki/` in their path (e.g.
+/// `https://instance.atlassian.net/wiki/spaces/DEMO/pages/123/Title`),
+/// the base URL includes the `/wiki` context path so that REST API calls
+/// resolve to the correct endpoint (`{base}/rest/api/content/...`).
+///
+/// For Data Center URLs without a `/wiki/` prefix, only the origin
+/// (scheme + host + optional port) is returned.
 fn extract_base_url(page_url: &str) -> Result<String> {
     let parsed = url::Url::parse(page_url).context("Invalid page URL")?;
     let origin = format!(
@@ -177,6 +199,13 @@ fn extract_base_url(page_url: &str) -> Result<String> {
         parsed.host_str().unwrap_or(""),
         parsed.port().map(|p| format!(":{p}")).unwrap_or_default()
     );
+
+    // Preserve /wiki context path for Confluence Cloud instances.
+    let path = parsed.path();
+    if path.starts_with("/wiki/") || path == "/wiki" {
+        return Ok(normalize_base_url(&format!("{origin}/wiki")));
+    }
+
     Ok(normalize_base_url(&origin))
 }
 
@@ -205,7 +234,7 @@ async fn run() -> Result<()> {
     logger::init(config.log_level);
 
     let base_url = extract_base_url(&config.page_url)?;
-    let token = get_required_env()?.personal_access_token;
+    let token = resolve_auth()?;
     let client = build_http_client()?;
 
     let page_id = resolve_page_id_from_url(&client, &config.page_url, &base_url, &token)
@@ -597,7 +626,25 @@ mod tests {
         let url = "http://confluence.example.com/wiki/spaces/PROJ/pages/123/Title?foo=bar";
         assert_eq!(
             extract_base_url(url).unwrap(),
-            "http://confluence.example.com"
+            "http://confluence.example.com/wiki"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_preserves_wiki_context_path() {
+        let url = "https://instance.atlassian.net/wiki/spaces/DEMO/pages/9876543/My+Page";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://instance.atlassian.net/wiki"
+        );
+    }
+
+    #[test]
+    fn extract_base_url_no_wiki_prefix_returns_origin_only() {
+        let url = "https://confluence.example.com/pages/viewpage.action?pageId=1234";
+        assert_eq!(
+            extract_base_url(url).unwrap(),
+            "https://confluence.example.com"
         );
     }
 
