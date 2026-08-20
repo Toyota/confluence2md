@@ -50,7 +50,7 @@ The CLI itself is internally pipelined: each stage consumes the HTML produced by
 
 ```mermaid
 flowchart TD
-    A[main.rs<br/>parse CLI / env] --> B[confluence::resolve_page_id_from_url]
+    A[main.rs<br/>parse CLI / env] --> B[confluence::resolve_page_id_from_url<br/>short-link/tinyurl.action redirects resolved internally]
     B --> C[confluence::fetch_confluence_page<br/>export_view / storage HTML]
     C --> D[confluence::list_attachments<br/>+ build_attachment_maps]
     D --> E[drawio::resolve_drawio_diagrams<br/>draw.io macros / rendered imgs → .drawio.png]
@@ -87,7 +87,7 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 - **Key functions:**
     - `build_http_client` — `reqwest` client backed by `rustls`. Trust anchors come from both the bundled Mozilla WebPKI root set (`rustls-tls-webpki-roots`) and the host OS certificate store (`rustls-tls-native-roots`); the two sets are merged so corporate / internal CAs trusted by the host work without configuration, and minimal container images without a system CA bundle still work via the bundled roots.
     - `get_required_env` — reads the personal access token from `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN`.
-    - `resolve_page_id_from_url` — supports `pageId`, `/spaces/.../pages/<id>/`, `/display/<space>/<title>`, and `spaceKey`+`title` URL formats.
+    - `resolve_page_id_from_url` — first resolves any `/x/<key>` short link and the `tinyurl.action?urlIdentifier=...` hop it redirects through (no auto-redirect; each `Location` must be HTTPS, userinfo-free, and same-origin before it's trusted, bounded by `MAX_REDIRECT_HOPS`), then supports `pageId`, `/spaces/.../pages/<id>/`, `/display/<space>/<title>`, and `spaceKey`+`title` URL formats on the resolved URL.
     - `fetch_confluence_page` — fetches the page with `body.export_view` and `body.storage` expansions.
     - `list_attachments`, `build_attachment_maps` — paginated attachment listing keyed by title and by media ID.
     - `download_images_and_rewrite_html` — replaces regular `<img src>` values with local relative paths under the assets directory, skipping PlantUML endpoints and assets already rewritten to local paths.
@@ -157,6 +157,13 @@ sequenceDiagram
     User->>CLI: confluence2md <pageUrl>
     CLI->>CLI: parse args + env, init logger
     CLI->>Conf: resolve_page_id_from_url(url)
+    opt url is a /x/<key> or tinyurl.action redirect
+        loop up to MAX_REDIRECT_HOPS
+            Conf->>API: GET url (redirects disabled)
+            API-->>Conf: 3xx + Location
+            Conf->>Conf: validate HTTPS, no userinfo, same origin
+        end
+    end
     Conf->>API: GET /rest/api/content?...
     API-->>Conf: page id
     CLI->>Conf: fetch_confluence_page(id)
@@ -292,6 +299,7 @@ There is no database, cache, or message queue.
 ## 6. External Integrations / APIs
 
 - **Confluence REST API v1** — read-only access to pages and attachments: `GET /rest/api/content/{id}?expand=body.storage,body.export_view`, `GET /rest/api/content/{id}/child/attachment` (paginated), `GET /rest/api/content/search?cql=...` (for title-based URL resolution), and binary downloads under `/download/attachments/{pageId}/...`.
+- **Confluence shortened links** — `GET /x/<key>` and the `tinyurl.action` hop it redirects through, fetched with redirect-following disabled to read `Location` at each hop (see §3.2).
 - **Authentication:** HTTP `Authorization: Bearer <token>` using a Personal Access Token.
 
 No other external services are called.
