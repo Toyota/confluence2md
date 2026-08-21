@@ -200,6 +200,9 @@ confluence2md automatically detects the page from various Confluence URL formats
 | Cloud `/spaces/.../pages/` path | `https://confluence.example.com/wiki/spaces/DEMO/pages/9876543/My+Page`            |
 | Classic `/display/` path        | `https://confluence.example.com/display/DEMO/My+Page+Title`                        |
 | `spaceKey` + `title` params     | `https://confluence.example.com/pages/viewpage.action?spaceKey=DEMO&title=My+Page` |
+| Shortened `/x/<key>` link       | `https://confluence.example.com/x/AbCdEf`                                          |
+
+Shortened links redirect through an intermediate `tinyurl.action?urlIdentifier=...` URL before reaching the real page; both hops are resolved without auto-following redirects, validating each `Location` (HTTPS, no userinfo, same origin) before use.
 
 ## 🛠️ Tech Stack
 

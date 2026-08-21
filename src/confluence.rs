@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use once_cell::sync::Lazy;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use regex::Regex;
 use reqwest::Client;
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_TYPE, HeaderMap, HeaderValue,
@@ -18,6 +20,9 @@ use crate::utils::{
     HeaderHints, URI_COMPONENT, decode_html_attribute, ensure_dir,
     get_file_name_from_url_or_headers, resolve_url, to_markdown_asset_path,
 };
+
+const USER_AGENT: &str = concat!("confluence2md/", env!("CARGO_PKG_VERSION"));
+const SHORT_URL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 // ── Public types ───────────────────────────────────────────────────
 
@@ -475,8 +480,6 @@ pub async fn download_images_and_rewrite_html(
     html: &str,
     opts: DownloadImagesOptions<'_>,
 ) -> Result<String> {
-    use once_cell::sync::Lazy;
-    use regex::Regex;
     static IMG_RE: Lazy<Regex> =
         Lazy::new(|| Regex::new(r#"(?is)<img\b[^>]*\bsrc=(?:"([^"]*)"|'([^']*)')[^>]*>"#).unwrap());
     static PLANTUML_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)/rest/plantuml/").unwrap());
@@ -601,7 +604,10 @@ pub async fn resolve_page_id_from_url(
     base_url: &str,
     token: &str,
 ) -> Result<String> {
-    let parsed = Url::parse(page_url).context("invalid URL")?;
+    // Expand `/x/<key>` short links and the `tinyurl.action?urlIdentifier=...`
+    // hop they redirect through before applying any of the patterns below.
+    let resolved_url = resolve_confluence_redirects(page_url, token).await?;
+    let parsed = Url::parse(&resolved_url).context("invalid URL")?;
 
     // 1. pageId query param.
     for (k, v) in parsed.query_pairs() {
@@ -611,8 +617,6 @@ pub async fn resolve_page_id_from_url(
     }
 
     // 2. /spaces/SPACE/pages/{pageId}.
-    use once_cell::sync::Lazy;
-    use regex::Regex;
     static WIKI_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"/spaces/[^/]+/pages/(\d+)").unwrap());
     if let Some(c) = WIKI_RE.captures(parsed.path()) {
         return Ok(c[1].to_owned());
@@ -640,7 +644,7 @@ pub async fn resolve_page_id_from_url(
         return lookup_page_id_by_space_and_title(client, &space, &title, base_url, token).await;
     }
 
-    bail!("Cannot determine page ID from URL: {page_url}")
+    bail!("Cannot determine page ID from URL: {resolved_url}")
 }
 
 fn decode_path_segment(s: &str) -> String {
@@ -649,10 +653,120 @@ fn decode_path_segment(s: &str) -> String {
         .into_owned()
 }
 
+// ── Short URL expansion ────────────────────────────────────────────
+
+// Matches `/x/<key>` as the final path segment, with any context path in
+// front of it (e.g. Confluence Cloud's `/wiki/x/<key>`).
+static SHORT_URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|/)x/[A-Za-z0-9_-]+/?$").unwrap());
+
+// Matches the `tinyurl.action` endpoint that `/x/<key>` redirects through
+// before reaching the real page URL (e.g. `/pages/tinyurl.action`).
+static TINYURL_ACTION_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:^|/)tinyurl\.action$").unwrap());
+
+const MAX_REDIRECT_HOPS: usize = 5;
+
+/// Returns `true` if `url` is a Confluence endpoint that only redirects
+/// (`/x/<key>` or `tinyurl.action?urlIdentifier=...`) rather than a page URL.
+fn is_confluence_redirect_url(parsed: &Url) -> bool {
+    SHORT_URL_RE.is_match(parsed.path())
+        || (TINYURL_ACTION_RE.is_match(parsed.path())
+            && parsed.query_pairs().any(|(k, _)| k == "urlIdentifier"))
+}
+
+/// Resolves `/x/<key>` short links and the `tinyurl.action` hop they
+/// redirect through, returning the first URL that isn't itself a redirect.
+///
+/// `url` must be HTTPS, checked before any request is sent so the token is
+/// never sent in cleartext. Non-redirect URLs (the common case) pass through
+/// untouched, with no request made at all.
+async fn resolve_confluence_redirects(url: &str, token: &str) -> Result<String> {
+    let parsed = Url::parse(url).context("invalid URL")?;
+    if !is_confluence_redirect_url(&parsed) {
+        return Ok(url.to_owned());
+    }
+    if parsed.scheme() != "https" {
+        bail!("Confluence short URL must use HTTPS: {url}");
+    }
+    follow_redirect_chain(parsed, token).await
+}
+
+/// Iterates the redirect chain. Split out from [`resolve_confluence_redirects`]
+/// so tests can exercise it directly against a plain-HTTP wiremock server;
+/// each hop's `Location` is still validated (HTTPS, no userinfo, same
+/// origin) before it's trusted, which transitively guarantees every hop
+/// after the first is HTTPS.
+async fn follow_redirect_chain(url: Url, token: &str) -> Result<String> {
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(SHORT_URL_TIMEOUT)
+        .user_agent(USER_AGENT)
+        .build()
+        .context("build HTTP client for short URL expansion")?;
+
+    let mut current = url;
+    for _ in 0..MAX_REDIRECT_HOPS {
+        if !is_confluence_redirect_url(&current) {
+            return Ok(current.to_string());
+        }
+        current = fetch_and_validate_redirect(&client, &current, token).await?;
+    }
+    bail!("Too many redirects while resolving Confluence short URL: {current}")
+}
+
+/// Sends one request to a redirect-issuing URL and validates its `Location`.
+async fn fetch_and_validate_redirect(client: &Client, url: &Url, token: &str) -> Result<Url> {
+    let response = client
+        .get(url.clone())
+        .headers(auth_headers(token))
+        .send()
+        .await
+        .with_context(|| format!("HTTP request failed: {url}"))?;
+
+    let status = response.status();
+    if !status.is_redirection() {
+        bail!(
+            "Confluence short URL did not redirect: {} {} {url}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or(""),
+        );
+    }
+
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| anyhow!("Redirect response missing Location header: {url}"))?
+        .to_owned();
+
+    validate_redirect_target(url, &location)
+}
+
+/// Resolves a `Location` against the URL it came from and refuses any target
+/// that could leak the token: non-HTTPS, embedded userinfo, or a different origin.
+fn validate_redirect_target(source: &Url, location: &str) -> Result<Url> {
+    let target = source
+        .join(location)
+        .with_context(|| format!("Invalid Location header: {location}"))?;
+
+    if target.scheme() != "https" {
+        bail!("Refusing to follow short URL redirect to a non-HTTPS target: {target}");
+    }
+    if !target.username().is_empty() || target.password().is_some() {
+        bail!("Refusing to follow short URL redirect containing userinfo: {target}");
+    }
+    if target.host_str() != source.host_str()
+        || target.port_or_known_default() != source.port_or_known_default()
+    {
+        bail!("Refusing to follow short URL redirect to a different origin: {target}");
+    }
+    Ok(target)
+}
+
 // Helper for callers that need a configured HTTP client.
 pub fn build_http_client() -> Result<Client> {
     Client::builder()
-        .user_agent("confluence2md/1.2.0")
+        .user_agent(USER_AGENT)
         .build()
         .context("build HTTP client")
 }
@@ -668,7 +782,7 @@ pub(crate) fn _decode_attribute(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path, query_param};
+    use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
@@ -723,6 +837,16 @@ mod tests {
             err.to_string()
                 .contains("Cannot determine page ID from URL")
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_page_id_rejects_non_https_short_url() {
+        let client = Client::new();
+        let url = "http://confluence.example.com/x/AbCdEf";
+        let err = resolve_page_id_from_url(&client, url, "http://confluence.example.com", "token")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must use HTTPS"));
     }
 
     #[tokio::test]
@@ -1481,5 +1605,227 @@ mod tests {
                 "Base64 mismatch for ({username:?}, {api_token:?}): got {b64_portion}, expected {expected_b64}"
             );
         }
+    }
+
+    // ── Short URL expansion ────────────────────────────────────────
+
+    fn is_redirect_url(url: &str) -> bool {
+        Url::parse(url)
+            .map(|u| is_confluence_redirect_url(&u))
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn is_confluence_redirect_url_matches_x_key_path() {
+        assert!(is_redirect_url("https://confluence.example.com/x/AbCdEf"));
+        assert!(is_redirect_url("https://confluence.example.com/x/AbCdEf/"));
+        // Confluence Cloud's actual short-link format prefixes a `/wiki` context path.
+        assert!(is_redirect_url("https://site.atlassian.net/wiki/x/AbCdEf"));
+    }
+
+    #[test]
+    fn is_confluence_redirect_url_matches_tinyurl_action() {
+        assert!(is_redirect_url(
+            "https://confluence.example.com/pages/tinyurl.action?urlIdentifier=XYZ"
+        ));
+        assert!(is_redirect_url(
+            "https://site.atlassian.net/wiki/pages/tinyurl.action?urlIdentifier=XYZ"
+        ));
+        // tinyurl.action without urlIdentifier isn't the redirect endpoint.
+        assert!(!is_redirect_url(
+            "https://confluence.example.com/pages/tinyurl.action"
+        ));
+    }
+
+    #[test]
+    fn is_confluence_redirect_url_rejects_other_paths() {
+        assert!(!is_redirect_url(
+            "https://confluence.example.com/pages/viewpage.action?pageId=1"
+        ));
+        assert!(!is_redirect_url(
+            "https://confluence.example.com/x/AbC/extra"
+        ));
+        assert!(!is_redirect_url("not a url"));
+    }
+
+    #[tokio::test]
+    async fn resolve_confluence_redirects_rejects_non_https_source() {
+        // No mock server: the HTTPS check must reject before any request is sent.
+        let err = resolve_confluence_redirects("http://confluence.example.com/x/AbCdEf", "token")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must use HTTPS"));
+    }
+
+    #[tokio::test]
+    async fn resolve_confluence_redirects_passes_through_non_redirect_url() {
+        // Not a redirect-issuing path, so no request is made and no HTTPS check applies.
+        let url = resolve_confluence_redirects(
+            "http://confluence.example.com/pages/viewpage.action?pageId=1",
+            "token",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            url,
+            "http://confluence.example.com/pages/viewpage.action?pageId=1"
+        );
+    }
+
+    // ── validate_redirect_target: pure, no network ──────────────────
+
+    #[test]
+    fn validate_redirect_target_accepts_relative_same_origin_location() {
+        let source = Url::parse("https://confluence.example.com/x/AbCdEf").unwrap();
+        let target =
+            validate_redirect_target(&source, "/pages/viewpage.action?pageId=123").unwrap();
+        assert_eq!(
+            target.as_str(),
+            "https://confluence.example.com/pages/viewpage.action?pageId=123"
+        );
+    }
+
+    #[test]
+    fn validate_redirect_target_rejects_scheme_relative_cross_origin() {
+        let source = Url::parse("https://confluence.example.com/x/AbCdEf").unwrap();
+        let err = validate_redirect_target(&source, "//evil.example.com/steal").unwrap_err();
+        assert!(err.to_string().contains("different origin"));
+    }
+
+    #[test]
+    fn validate_redirect_target_rejects_non_https() {
+        let source = Url::parse("https://confluence.example.com/x/AbCdEf").unwrap();
+        let err = validate_redirect_target(&source, "http://confluence.example.com/p?pageId=1")
+            .unwrap_err();
+        assert!(err.to_string().contains("non-HTTPS"));
+    }
+
+    #[test]
+    fn validate_redirect_target_rejects_userinfo() {
+        let source = Url::parse("https://confluence.example.com/x/AbCdEf").unwrap();
+        let err = validate_redirect_target(&source, "https://attacker:pw@evil.example.com/steal")
+            .unwrap_err();
+        assert!(err.to_string().contains("userinfo"));
+    }
+
+    #[test]
+    fn validate_redirect_target_rejects_same_host_different_port() {
+        let source = Url::parse("https://confluence.example.com/x/AbCdEf").unwrap();
+        let err =
+            validate_redirect_target(&source, "https://confluence.example.com:8443/p?pageId=1")
+                .unwrap_err();
+        assert!(err.to_string().contains("different origin"));
+    }
+
+    // ── follow_redirect_chain: network round trips over wiremock ────
+    //
+    // A validated redirect target must be HTTPS, so a real second hop can
+    // only be reached over genuine TLS — which wiremock (plain HTTP only)
+    // cannot serve. These tests therefore cover exactly one real hop each;
+    // that `is_confluence_redirect_url` also matches `tinyurl.action` (proven
+    // above) is what guarantees the loop keeps going instead of stopping
+    // there once a real chain runs against an actual Confluence server.
+
+    /// Starts a mock server that redirects `/x/AbCdEf` to `location`.
+    async fn short_url_redirecting_to(location: &str) -> (MockServer, Url) {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x/AbCdEf"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", location))
+            .mount(&server)
+            .await;
+        let short_url = Url::parse(&format!("{}/x/AbCdEf", server.uri())).unwrap();
+        (server, short_url)
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_resolves_valid_https_same_origin_redirect() {
+        // wiremock only serves plain HTTP, so Location declares "https" on the
+        // same host:port to exercise the HTTPS + same-origin checks end-to-end.
+        let server = MockServer::start().await;
+        let https_authority = server.uri().replacen("http://", "https://", 1);
+        Mock::given(method("GET"))
+            .and(path("/x/AbCdEf"))
+            .and(header("Authorization", "Bearer token"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "Location",
+                format!("{https_authority}/pages/viewpage.action?pageId=123"),
+            ))
+            .mount(&server)
+            .await;
+
+        let short_url = Url::parse(&format!("{}/x/AbCdEf", server.uri())).unwrap();
+        let resolved = follow_redirect_chain(short_url, "Bearer token")
+            .await
+            .unwrap();
+        assert_eq!(
+            resolved,
+            format!("{https_authority}/pages/viewpage.action?pageId=123")
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_continues_past_tinyurl_action_instead_of_stopping() {
+        let server = MockServer::start().await;
+        let https_authority = server.uri().replacen("http://", "https://", 1);
+        Mock::given(method("GET"))
+            .and(path("/x/AbCdEf"))
+            .respond_with(ResponseTemplate::new(302).insert_header(
+                "Location",
+                format!("{https_authority}/pages/tinyurl.action?urlIdentifier=XYZ"),
+            ))
+            .mount(&server)
+            .await;
+
+        // The https-labeled tinyurl.action target isn't actually TLS-capable
+        // (wiremock only speaks plain HTTP), so a genuine second request
+        // attempt fails at the transport layer. That failure is exactly what
+        // proves the loop didn't stop and return the tinyurl.action URL as
+        // final — it tried to follow it.
+        let short_url = Url::parse(&format!("{}/x/AbCdEf", server.uri())).unwrap();
+        let err = follow_redirect_chain(short_url, "token").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("HTTP request failed"), "{msg}");
+        assert!(
+            msg.contains("tinyurl.action"),
+            "second hop was not attempted: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_rejects_cross_origin_target() {
+        let (_server, short_url) =
+            short_url_redirecting_to("https://evil.example.com/pages/viewpage.action?pageId=123")
+                .await;
+        let err = follow_redirect_chain(short_url, "token").await.unwrap_err();
+        assert!(err.to_string().contains("different origin"));
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_rejects_redirect_without_location() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x/AbCdEf"))
+            .respond_with(ResponseTemplate::new(302))
+            .mount(&server)
+            .await;
+
+        let short_url = Url::parse(&format!("{}/x/AbCdEf", server.uri())).unwrap();
+        let err = follow_redirect_chain(short_url, "token").await.unwrap_err();
+        assert!(err.to_string().contains("missing Location header"));
+    }
+
+    #[tokio::test]
+    async fn follow_redirects_rejects_non_redirect_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/x/AbCdEf"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not a redirect"))
+            .mount(&server)
+            .await;
+
+        let short_url = Url::parse(&format!("{}/x/AbCdEf", server.uri())).unwrap();
+        let err = follow_redirect_chain(short_url, "token").await.unwrap_err();
+        assert!(err.to_string().contains("did not redirect"));
     }
 }
