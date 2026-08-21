@@ -70,16 +70,29 @@ Download the latest release from the [Releases](https://github.com/Toyota/conflu
 
 Set the following environment variables before running:
 
-| Variable                              | Description                                                                | Example   |
-| ------------------------------------- | -------------------------------------------------------------------------- | --------- |
-| `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN` | A Confluence Personal Access Token                                         | `NjQ2...` |
-| `CONFLUENCE2MD_OUTPUT_PATH`           | Directory to write the output Markdown file (default: current directory)   | `out`     |
-| `CONFLUENCE2MD_DUMP_STATE_PATH`       | Directory to write diagnostic state and raw intermediate files             | `dumps`   |
-| `CONFLUENCE2MD_LOG_LEVEL`             | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` (default: `INFO`) | `DEBUG`   |
-| `CONFLUENCE2MD_TABLE_CONVERSION`      | Table conversion mode: `default` \| `always` (default: `default`)          | `always`  |
-| `CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT` | Set to `true` to remove strikethrough text entirely             | `true`    |
+| Variable                              | Description                                                                | Example                |
+| ------------------------------------- | -------------------------------------------------------------------------- | ---------------------- |
+| `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN` | Personal Access Token for Bearer auth (Data Center)                        | `NjQ2...`              |
+| `CONFLUENCE2MD_USERNAME`              | Atlassian account email for Basic auth (Cloud)                             | `user@example.com`     |
+| `CONFLUENCE2MD_API_TOKEN`             | Atlassian Cloud API token for Basic auth (Cloud)                           | `ATATT3x...`           |
+| `CONFLUENCE2MD_OUTPUT_PATH`           | Directory to write the output Markdown file (default: current directory)   | `out`                  |
+| `CONFLUENCE2MD_DUMP_STATE_PATH`       | Directory to write diagnostic state and raw intermediate files             | `dumps`                |
+| `CONFLUENCE2MD_LOG_LEVEL`             | Log verbosity: `DEBUG` \| `INFO` \| `WARNING` \| `ERROR` (default: `INFO`) | `DEBUG`                |
+| `CONFLUENCE2MD_TABLE_CONVERSION`      | Table conversion mode: `default` \| `always` (default: `default`)          | `always`               |
+| `CONFLUENCE2MD_REMOVE_STRIKETHROUGH_TEXT` | Set to `true` to remove strikethrough text entirely             | `true`                 |
 
-You can export them in your shell profile or pass them inline:
+### Authentication
+
+confluence2md supports two authentication methods:
+
+| Method | Use with | Environment Variables |
+| ------ | -------- | --------------------- |
+| **Bearer auth (PAT)** | Confluence Data Center | `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN` |
+| **Basic auth (API token)** | Confluence Cloud | `CONFLUENCE2MD_USERNAME` + `CONFLUENCE2MD_API_TOKEN` |
+
+**Priority:** If `CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN` is set, it is always used (Bearer auth). Otherwise, `CONFLUENCE2MD_USERNAME` and `CONFLUENCE2MD_API_TOKEN` are used together for Basic auth.
+
+#### Data Center (PAT)
 
 ```bash
 export CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN="your-token-here"
@@ -87,13 +100,32 @@ export CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN="your-token-here"
 
 > 💡 **Tip:** To generate a Personal Access Token, go to your Confluence profile → **Settings** → **Personal Access Tokens** → **Create token**.
 
+#### Confluence Cloud (API token)
+
+```bash
+export CONFLUENCE2MD_USERNAME="your-email@example.com"
+export CONFLUENCE2MD_API_TOKEN="your-api-token"
+```
+
+> 💡 **Tip:** To generate an API token, go to [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) → **Security** → **Create and manage API tokens** → **Create API token**.
+
 ## 🚀 Usage
 
 ### Example
 
+**Data Center (PAT):**
+
 ```bash
 export CONFLUENCE2MD_PERSONAL_ACCESS_TOKEN="your-token-here"
 confluence2md 'https://confluence.example.com/pages/viewpage.action?pageId=393229'
+```
+
+**Confluence Cloud (API token):**
+
+```bash
+export CONFLUENCE2MD_USERNAME="your-email@example.com"
+export CONFLUENCE2MD_API_TOKEN="your-api-token"
+confluence2md 'https://instance.atlassian.net/wiki/spaces/DEMO/pages/9876543/My+Page'
 ```
 
 ### Options
