@@ -13,6 +13,7 @@ confluence2md/
 ├── src/                    # Rust source (Cargo binary + library)
 │   ├── main.rs             # CLI entry point: arg parsing + pipeline orchestration
 │   ├── lib.rs              # Library root: re-declares public modules
+│   ├── auth.rs             # Auth env resolution + Authorization header helpers
 │   ├── confluence.rs       # Confluence REST client: page/attachment fetch, image rewrite
 │   ├── drawio.rs           # draw.io fallback resolution + PNG tEXt embedding
 │   ├── plantuml.rs         # PlantUML source extraction + !include rewriting
@@ -80,7 +81,12 @@ confluence2md is a single Rust crate that exposes one binary (`confluence2md`) a
 - **Inputs:** `<pageUrl>` arg, `--output-path`, `--log-level`, `--table-conversion`, plus `CONFLUENCE2MD_*` env vars.
 - **Outputs:** `Page_Title.md`, `Page_Title_assets/`. When `--dump-state-path <DIR>` or `CONFLUENCE2MD_DUMP_STATE_PATH` is specified, the raw page API snapshot (`content.json`), debug intermediates (`export.html`, `storage.html`, `rewrite_*.html`), and raw draw.io XML files (`*.drawio`) are written to that dump directory.
 
-### 3.2. `confluence` — REST Client and Image Rewriter
+### 3.2. `auth` — Authentication
+
+- **Responsibility:** Resolve Confluence credentials from environment variables and build Authorization headers.
+- **Key functions:** `resolve_auth`, `auth_headers` (JSON). Same-origin binary downloads use `utils::binary_auth_headers`.
+
+### 3.3. `confluence` — REST Client and Image Rewriter
 
 - **Responsibility:** Talk to the Confluence REST API v1 and download regular binary assets referenced by the page HTML. draw.io and PlantUML assets are resolved by their dedicated modules first.
 - **Key types:** `EnvConfig`, `PageResult`, `Attachment`, `AttachmentMaps`, `DownloadBinaryOptions`, `DownloadAttachmentOptions`, `DownloadImagesOptions`.
