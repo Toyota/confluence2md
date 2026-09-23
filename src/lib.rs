@@ -4,6 +4,7 @@
 //! while following Rust conventions (snake_case, idiomatic `Result` returns,
 //! types co-located with the owning module).
 
+pub mod auth;
 pub mod confluence;
 pub mod drawio;
 pub mod html;
